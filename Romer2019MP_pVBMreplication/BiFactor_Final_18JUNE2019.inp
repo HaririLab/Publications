@@ -1,0 +1,141 @@
+TITLE:  Bi-Factor Model w/ Method Factor;
+        Renate Houts, Ph.D.;
+        18JUNE2019;
+
+DATA:   FILE = symp_June2019.dat;
+
+VARIABLE:   
+        NAMES ARE 
+            snum sex 
+            adhd18                       adhd38  adhd45 
+            adhd18b                      adhd38b adhd45b 
+                           ptsd26 ptsd32 ptsd38  ptsd45 
+            Alc18   Alc21  Alc26  Alc32  Alc38   Alc45 
+            Mar18   Mar21  Mar26  Mar32  Mar38   Mar45 
+            Drg26   Drg32  Drg38  Drg45 
+            smk21   smk26                smk38   smk45 
+            cd18    cd21   cd26   cd32   cd38    cd45 
+            mde18   mde21  mde26  mde32  mde38   mde45 
+            Gad18   Gad21  Gad26  Gad32  Gad38   Gad45 
+            Fear18  Fear21 Fear26 Fear32 Fear38  Fear45 
+            Anrx18  Anrx21 Anrx26 
+            Bul18   Bul21  Bul26 
+            OCD18   OCD21  OCD26  OCD32  OCD38   OCD45 
+            Man21   Man26  Man32  Man38  Man45 
+            scz21   scz26  scz32  scz38  scz45;
+
+        MISSING 
+            ALL (9999); 
+
+        USEVARIABLES ARE 
+            adhd18b                     adhd38b adhd45b 
+                          ptsd26 ptsd32 ptsd38 ptsd45 
+            Alc18  Alc21  Alc26  Alc32  Alc38  Alc45 
+            Mar18  Mar21  Mar26  Mar32  Mar38  Mar45 
+                          Drg26  Drg32  Drg38  Drg45 
+                   smk21  smk26         smk38  smk45 
+            cd18   cd21   cd26   cd32   cd38   cd45 
+            mde18  mde21  mde26  mde32  mde38  mde45 
+            Gad18  Gad21  Gad26  Gad32  Gad38  Gad45 
+            Fear18 Fear21 Fear26 Fear32 Fear38 Fear45 
+            Anrx18 Anrx21 Anrx26 
+            Bul18  Bul21  Bul26 
+            OCD18  OCD21  OCD26  OCD32  OCD38  OCD45 
+                   Man21  Man26  Man32  Man38  Man45 
+                   scz21  scz26  scz32  scz38  scz45;
+
+        CATEGORICAL ARE 
+                          ptsd26 ptsd32 ptsd38 ptsd45 
+            Alc18  Alc21  Alc26  Alc32  Alc38  Alc45 
+            Mar18  Mar21  Mar26  Mar32  Mar38  Mar45 
+                          Drg26  Drg32  Drg38  Drg45 
+                   smk21  smk26         smk38  smk45 
+            cd18   cd21   cd26   cd32   cd38   cd45 
+            mde18  mde21  mde26  mde32  mde38  mde45 
+            Gad18  Gad21  Gad26  Gad32  Gad38  Gad45 
+            Fear18 Fear21 Fear26 Fear32 Fear38 Fear45 
+            Anrx18 Anrx21 Anrx26 
+            Bul18  Bul21  Bul26 
+            OCD18  OCD21  OCD26  OCD32  OCD38  OCD45 
+                   Man21  Man26  Man32  Man38  Man45 
+                   scz21  scz26  scz32  scz38  scz45;
+
+        IDVARIABLE IS 
+            snum;
+
+ANALYSIS:
+
+MODEL:
+    ! Define Mental Health factors across time;
+    adhd  BY adhd18b                     adhd38b adhd45b;
+    alc   BY Alc18  Alc21  Alc26  Alc32  Alc38  Alc45;
+    mar   BY Mar18  Mar21  Mar26  Mar32  Mar38  Mar45;
+    drg   BY               Drg26  Drg32  Drg38  Drg45;
+    smk   BY        Smk21  Smk26         Smk38  Smk45;
+    cd    BY CD18   CD21   CD26   CD32   CD38   CD45;
+
+    mde   BY Mde18  Mde21  Mde26  Mde32  Mde38  Mde45;
+    gad   BY Gad18  Gad21  Gad26  Gad32  Gad38  Gad45;
+    fear  BY Fear18 Fear21 Fear26 Fear32 Fear38 Fear45;
+    ptsd  BY               ptsd26 ptsd32 ptsd38 ptsd45;
+
+    ocd   BY OCD18  OCD21  OCD26  OCD32  OCD38  OCD45;
+    mania BY        Man21  Man26  Man32  Man38  Man45;
+    scz   BY        scz21  scz26  scz32  scz38  scz45;
+
+    eat   BY anrx18 anrx21 anrx26
+             bul18  bul21  bul26;
+
+    ! Define Externalizing & Internalizing factors;
+    !    ... uncorrelated w/ "Little P";
+    !    ... correlated with each other;
+    ext  BY alc* adhd mar drg smk CD; 
+    int  BY mde* ptsd eat gad fear;
+
+    ! Define "p-factor";
+    !   ... uncorrelated with Externalizing & Internalizing;
+    p BY adhd* alc mar drg smk CD mde gad fear ptsd eat ocd mania scz;
+
+    ! Standardize (scale) to Mean = 0 Var = 1;
+    [ext@0 int@0 p@0];
+     ext@1 int@1 p@1;
+
+    ! Correlations across measured symptom scales within a measurement period;
+    !    To account for measurement time anomalies;
+    !    These are uncorrelated with each other and uncorrelated with
+    !    psychopathology factors;
+
+    Age18 BY adhd18b* alc18 mar18 CD18 mde18 gad18 fear18 anrx18 bul18 ocd18;
+    Age21 BY alc21* mar21 smk21 CD21 mde21 gad21 fear21 anrx21 bul21 ocd21 man21
+             scz21;
+    Age26 BY alc26* mar26 drg26 smk26 CD26 mde26 gad26 fear26 anrx26 bul21 ptsd26
+             ocd26 man26 scz26;
+    Age32 BY alc32* mar32 drg32 CD32 mde32 gad32 fear32 ptsd32 ocd32 man32 scz32;
+    Age38 BY adhd38b* alc38 mar38 drg38 smk38 CD38 mde38 gad38 fear38 ptsd38 ocd38
+             man38 scz38;
+    Age45 BY adhd45b* alc45 mar45 drg45 smk45 CD45 mde45 gad45 fear45 ptsd45 ocd45
+             man45 scz45;
+
+    ! Standardize (scale) to Mean = 0 Var = 1;
+    [age18@0 age21@0 age26@0 age32@0 age38@0 age45@0];
+     age18@1 age21@1 age26@1 age32@1 age38@1 age45@1;
+
+    ! Set correlations to 0;
+    age18 WITH age21@0 age26@0 age32@0 age38@0 age45@0;
+    age21 WITH age26@0 age32@0 age38@0 age45@0;
+    age26 WITH age32@0 age38@0 age45@0;
+    age32 WITH age38@0 age45@0;
+    age38 WITH age45@0;
+
+    ext WITH age18@0 age21@0 age26@0 age32@0 age38@0 age45@0;
+    int WITH age18@0 age21@0 age26@0 age32@0 age38@0 age45@0;
+    p   WITH age18@0 age21@0 age26@0 age32@0 age38@0 age45@0;
+
+    p   WITH ext@0 int@0;
+    ext WITH int@0;
+
+OUTPUT: SAMPSTAT TECH1 TECH4 STANDARDIZED
+
+SAVEDATA:   FILE = BF_17JUN2019.dat;
+            SAVE = FSCORES;
+            SAMPLE IS corrmat_June2019.dat;

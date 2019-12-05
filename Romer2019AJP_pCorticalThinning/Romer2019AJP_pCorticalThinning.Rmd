@@ -1,0 +1,564 @@
+---
+title: "Romer_Pfactor_20190626_CTSA"
+author: "Maria Sison and Annchen Knodt"
+date: "6/26/2019 - 12/5/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,cache = TRUE, fig.path = 'Figs/')
+```
+
+## Image Processing
+
+1. HCP minimal structural preprocessing pipelines
+  - includes subcortical volume aseg atlas (FreeSurfer)
+2. Surface Glasser parcellation
+
+## Analysis
+
+### libraries and files
+```{r libraries,results='hide'} 
+library(pwr)
+library(plyr)
+library(readxl)
+library(GGally)
+library(caret)
+library(forestplot)
+library(foreign)
+corrCT_19 <- read.csv("H:/Database/DBIS/Imaging/HCPMPP/corrCT_HCPMPP.csv", header = TRUE, na.strings=".")
+SA_19 <- read.csv("H:/Database/DBIS/Imaging/HCPMPP/SA_HCPMPP.csv", header = TRUE, na.strings=".")
+TOT_19 <- read.csv("H:/Database/DBIS/Imaging/HCPMPP/Structural_wholebrain_HCPMPP.csv", header = TRUE, na.strings=".")
+aseg_19 <- read.csv("H:/Database/DBIS/Imaging/HCPMPP/aseg_HCPMPP.csv", na.strings=".")
+workdir <- "H:/Projects/Annchen/DBIS/P/CTSA/"
+```
+
+### Measures of T1 quality, inc Euler characteristic
+```{r euler}
+aseg_summary <- read.csv("H:/Database/DBIS/Imaging/FreeSurfer/v6.0/FreeSurfer_aseg_SummaryMeasures.csv", na.strings=".")
+T1_QC <- read.csv("H:/Database/DBIS/Imaging/QC/T1_QC.csv", na.strings=".", skip=2)
+averageFD <- read.csv("H:/Database/DBIS/Imaging/QC/fMRI_QC_averageFD.csv")
+averageFD$ID <- sub("sub-","DMHDS",averageFD$bidsid)
+QC_merged <- merge(aseg_summary, merge(T1_QC, averageFD, by="ID"), by="ID")
+
+png(paste(workdir, "T1QC_ManualRatingVsEuler.png", sep=""), height=4, width=6, res=150, units="in")
+  plot(QC_merged$Visual.rating, QC_merged$SurfaceHoles, xlab="Manual QC rating", ylab="Euler characteristic (# surface holes)")
+dev.off()
+
+cor.test(QC_merged$Visual.rating, QC_merged$SurfaceHoles)
+cor.test(QC_merged$Visual.rating, QC_merged$AverageFD)
+QC_merged$snum <- as.numeric(as.character(sub("DMHDS", "", QC_merged$ID)))
+```
+
+### set up phase 45 P factor
+```{r files}
+# base file
+DBISbase <- read.csv("H:/Collaborations/DBIS_ImagingBaseFile.csv", header = TRUE)
+# P 45 update
+LittleP <- read.csv("H:/Database/DBIS/P45_pFactor_June2019.csv", header = TRUE)
+# match original variable names
+names(LittleP) <- c("snum","EXT_B","INT_B","P_B","EXT_CF","INT_CF","THD_CF")
+# reorder columns
+LittleP <- subset(LittleP,select=c(1,4:7,2,3))
+# add Gender
+LittleP <- merge(DBISbase,LittleP,by="snum")
+names(LittleP)[2] <- "sex"
+LittleP$sex <- as.factor(LittleP$sex)
+# adding covariates for response to reviews, 11/3/19
+covars <- read.spss(paste(workdir,"Romer_addns.sav",sep=""),to.data.frame = TRUE,use.value.labels=FALSE)
+names(covars)[1] <- "snum"
+covars$AnyRxPsych45 <- as.factor(covars$AnyRxPsych45)
+scanMeds <- read.csv(paste0(workdir, "ScanTimeMeds.csv"))
+scanMeds$BrainMed_bin <- ifelse(scanMeds$BrainMed>0,1,0)
+LittleP <- merge(LittleP,merge(covars,merge(QC_merged[,c("snum","SurfaceHoles","AverageFD","Visual.rating")], scanMeds, by="snum"),by="snum"),by="snum")
+```
+
+### inclusive list (14 subjects excluded)
+```{r inclusive list}
+# inclusive list: all 1 and 1f
+LOG_master_inclusion_list <- read.csv("H:/Database/DBIS/Imaging/LOG_master_inclusion_list.csv")
+inclusion_lists <- subset(LOG_master_inclusion_list,select=c(1,5))
+inclusive <- subset(LOG_master_inclusion_list, HCPMPP_inclusive == 1 | HCPMPP_inclusive == "1f",select = c("scanID","HCPMPP_inclusive"))
+# for inclusive list, include all 1Fs and make decisions later for strict list (MNI warps can be included in SA bc that's calculated in native space but CT is in MNI space)
+inclusive$bidsid <- gsub("DMHDS","sub-",inclusive$scanID)
+list <- na.omit(subset(inclusive,select=c(3)))
+corrCT <- merge(list,corrCT_19,by="bidsid")
+SA <- merge(list,SA_19,by="bidsid")
+TOT <- merge(list,TOT_19,by="bidsid")
+aseg <- merge(list,aseg_19,by="bidsid")
+corrCT <- merge(LittleP,corrCT,by="snum")
+SA <- merge(LittleP,SA,by="snum")
+TOT <- merge(LittleP,TOT,by="snum")
+aseg <- merge(LittleP,aseg,by="snum")
+```
+
+
+### basic checks and summary statistics
+```{r summary}
+table(is.na(TOT$SA_TOT))
+table(is.na(TOT$corrCT_TOT))
+hist(TOT$SA_TOT)
+hist(TOT$corrCT_TOT)
+mean(TOT$SA_TOT)
+mean(TOT$corrCT_TOT)
+sd(TOT$SA_TOT)
+sd(TOT$corrCT_TOT)
+```
+
+### wholebrain analysis
+```{r wholebrain}
+
+wholebrain <- data.frame(x=c("CT","SA","BV"))
+for (i in 4:9){ # columns 4-9 are B and CF factor scores
+  CT_b <- summary(lm(scale(TOT$corrCT_TOT)~scale(TOT[[i]])+TOT$sex))$coefficients[2,1]
+  CT_se <- summary(lm(scale(TOT$corrCT_TOT)~scale(TOT[[i]])+TOT$sex))$coefficients[2,2]
+  CT_p <- summary(lm(scale(TOT$corrCT_TOT)~scale(TOT[[i]])+TOT$sex))$coefficients[2,4]
+  SA_b <- summary(lm(scale(TOT$SA_TOT)~scale(TOT[[i]])+TOT$sex))$coefficients[2,1]
+  SA_se <- summary(lm(scale(TOT$SA_TOT)~scale(TOT[[i]])+TOT$sex))$coefficients[2,2]
+  SA_p <- summary(lm(scale(TOT$SA_TOT)~scale(TOT[[i]])+TOT$sex))$coefficients[2,4]
+  BV_b <- summary(lm(scale(TOT$BV_aseg)~scale(TOT[[i]])+TOT$sex))$coefficients[2,1]
+  BV_se <- summary(lm(scale(TOT$BV_aseg)~scale(TOT[[i]])+TOT$sex))$coefficients[2,2]
+  BV_p <- summary(lm(scale(TOT$BV_aseg)~scale(TOT[[i]])+TOT$sex))$coefficients[2,4]
+  newb <- c(CT_b,SA_b,BV_b)
+  wholebrain <- cbind(wholebrain,newb)
+  names(wholebrain)[ncol(wholebrain)] <- names(TOT)[i]
+  newse <- c(CT_se,SA_se,BV_se)
+  wholebrain <- cbind(wholebrain,newse)
+  names(wholebrain)[ncol(wholebrain)] <- names(TOT)[i]
+  newp <- c(CT_p,SA_p,BV_p)
+  wholebrain <- cbind(wholebrain,newp)
+  names(wholebrain)[ncol(wholebrain)] <- names(TOT)[i]
+}
+wholebrain
+
+# confidence intervals
+wholebrain[1,8]-1.96*wholebrain[1,9]; wholebrain[1,8]+1.96*wholebrain[1,9] # CT and INT
+wholebrain[1,5]-1.96*wholebrain[1,6]; wholebrain[1,5]+1.96*wholebrain[1,6] # CT and EXT
+wholebrain[1,11]-1.96*wholebrain[1,12]; wholebrain[1,11]+1.96*wholebrain[1,12] # CT and THD
+wholebrain[1,2]-1.96*wholebrain[1,3]; wholebrain[1,2]+1.96*wholebrain[1,3] # CT and P
+
+# checking CT for robustness with covariates, 11/3/19
+wholebrain_covars <- data.frame(brainvar=character(), behavvar=character(), b=double(), lb=double(), ub=double(), n=integer(), covs=character())
+for (factor in c("INT_CF","EXT_CF","THD_CF","P_B")){
+    
+    s <- summary(lm(scale(TOT$corrCT_TOT)~scale(TOT[factor])+TOT$sex))
+    N <- sum(s$df[1:2])
+    b <- s$coefficients[2,1]
+    p <- s$coefficients[2,4]
+    se <- s$coefficients[2,2]
+    CI_lb <- b-1.96*se 
+    CI_ub <- b+1.96*se 
+    wholebrain_covars <- rbind(wholebrain_covars,data.frame(brainvar="CT",behavvar=factor,b=b,lb=CI_lb,ub=CI_ub,n=N,covs="sex"))
+    
+    s <- summary(lm(scale(TOT$corrCT_TOT)~scale(TOT[factor])+TOT$sex+scale(TOT$SESchildhd)))
+    N <- sum(s$df[1:2])
+    b <- s$coefficients[2,1]
+    p <- s$coefficients[2,4]
+    se <- s$coefficients[2,2]
+    CI_lb <- b-1.96*se 
+    CI_ub <- b+1.96*se 
+    wholebrain_covars <- rbind(wholebrain_covars,data.frame(brainvar="CT",behavvar=factor,b=b,lb=CI_lb,ub=CI_ub,n=N,covs="sex+SESchild"))
+    
+    s <- summary(lm(scale(TOT$corrCT_TOT)~scale(TOT[factor])+TOT$sex+TOT$AnyRxPsych45))
+    N <- sum(s$df[1:2])
+    b <- s$coefficients[2,1]
+    p <- s$coefficients[2,4]
+    se <- s$coefficients[2,2]
+    CI_lb <- b-1.96*se 
+    CI_ub <- b+1.96*se 
+    wholebrain_covars <- rbind(wholebrain_covars,data.frame(brainvar="CT",behavvar=factor,b=b,lb=CI_lb,ub=CI_ub,n=N,covs="sex+AnyRxPsych45"))
+    
+    s <- summary(lm(scale(TOT$corrCT_TOT)~scale(TOT[factor])+TOT$sex+TOT$BrainMed_bin))
+    N <- sum(s$df[1:2])
+    b <- s$coefficients[2,1]
+    p <- s$coefficients[2,4]
+    se <- s$coefficients[2,2]
+    CI_lb <- b-1.96*se 
+    CI_ub <- b+1.96*se 
+    wholebrain_covars <- rbind(wholebrain_covars,data.frame(brainvar="CT",behavvar=factor,b=b,lb=CI_lb,ub=CI_ub,n=N,covs="sex+ScanTimeBrainMed"))
+    
+    s <- summary(lm(scale(TOT$corrCT_TOT)~scale(TOT[factor])+TOT$sex+scale(TOT$CHIorganVar45)))
+    N <- sum(s$df[1:2])
+    b <- s$coefficients[2,1]
+    p <- s$coefficients[2,4]
+    se <- s$coefficients[2,2]
+    CI_lb <- b-1.96*se 
+    CI_ub <- b+1.96*se 
+    wholebrain_covars <- rbind(wholebrain_covars,data.frame(brainvar="CT",behavvar=factor,b=b,lb=CI_lb,ub=CI_ub,n=N,covs="sex+CHIorganVar45"))
+    
+    s <- summary(lm(scale(TOT$corrCT_TOT)~scale(TOT[factor])+TOT$sex+scale(TOT$SurfaceHoles)))
+    N <- sum(s$df[1:2])
+    b <- s$coefficients[2,1]
+    p <- s$coefficients[2,4]
+    se <- s$coefficients[2,2]
+    CI_lb <- b-1.96*se 
+    CI_ub <- b+1.96*se 
+    wholebrain_covars <- rbind(wholebrain_covars,data.frame(brainvar="CT",behavvar=factor,b=b,lb=CI_lb,ub=CI_ub,n=N,covs="sex+SurfaceHoles"))
+    
+    s <- summary(lm(scale(TOT$corrCT_TOT)~scale(TOT[factor])+TOT$sex+scale(TOT$Visual.rating)))
+    N <- sum(s$df[1:2])
+    b <- s$coefficients[2,1]
+    p <- s$coefficients[2,4]
+    se <- s$coefficients[2,2]
+    CI_lb <- b-1.96*se 
+    CI_ub <- b+1.96*se 
+    wholebrain_covars <- rbind(wholebrain_covars,data.frame(brainvar="CT",behavvar=factor,b=b,lb=CI_lb,ub=CI_ub,n=N,covs="sex+Visual.rating"))
+    
+    s <- summary(lm(scale(TOT$corrCT_TOT)~scale(TOT[factor])+TOT$sex+scale(TOT$AverageFD)))
+    N <- sum(s$df[1:2])
+    b <- s$coefficients[2,1]
+    p <- s$coefficients[2,4]
+    se <- s$coefficients[2,2]
+    CI_lb <- b-1.96*se 
+    CI_ub <- b+1.96*se 
+    wholebrain_covars <- rbind(wholebrain_covars,data.frame(brainvar="CT",behavvar=factor,b=b,lb=CI_lb,ub=CI_ub,n=N,covs="sex+AverageFD"))    
+}
+
+```
+
+###  forest plot for each variable with covariates
+```{r forestplot covars}
+
+library(RColorBrewer)
+
+subset1 <- wholebrain_covars[wholebrain_covars$covs=="sex",]
+subset2 <- wholebrain_covars[wholebrain_covars$covs=="sex+SESchild",]
+subset3 <- wholebrain_covars[wholebrain_covars$covs=="sex+AnyRxPsych45",]
+subset4 <- wholebrain_covars[wholebrain_covars$covs=="sex+ScanTimeBrainMed",]
+subset5 <- wholebrain_covars[wholebrain_covars$covs=="sex+CHIorganVar45",]
+subset6 <- wholebrain_covars[wholebrain_covars$covs=="sex+SurfaceHoles",]
+subset7 <- wholebrain_covars[wholebrain_covars$covs=="sex+Visual.rating",]
+subset8 <- wholebrain_covars[wholebrain_covars$covs=="sex+AverageFD",]
+
+tabletext <- cbind(
+  c("Internalizing","Externalizing","Thought","p Factor")
+)
+
+png(paste(workdir,"GlobalCT_forestWithCovars.png",sep=""),height=4,width=8,res=300,units="in")
+print(forestplot(tabletext,
+        hrzl_lines=list("4"=gpar(lty=1, col="grey")),
+         legend=c("(sex only)","Chldhd SES","Meds (P45)", "Meds (scan)","Disease","Img Qlty: Euler","Img Qlty: manual","fMRI motion"),
+        mean =cbind(subset1$b, subset2$b, subset3$b , subset4$b , subset5$b , subset6$b , subset7$b , subset8$b ),
+        lower=cbind(subset1$lb,subset2$lb,subset3$lb, subset4$lb, subset5$lb, subset6$lb, subset7$lb, subset8$lb),
+        upper=cbind(subset1$ub,subset2$ub,subset3$ub, subset4$ub, subset5$ub, subset6$ub, subset7$ub, subset8$ub),
+        boxsize=.1,
+        col=fpColors(box=c("#000000","#009E73","#0072B2","#56B4E9","mediumpurple3","#F0E442","#E69F00","#D55E00")),
+           xlab="Standardized Beta" ))
+dev.off()
+
+```
+
+### Forest plot for effect sizes for mean CT in diagnostic groups vs EMH
+```{r by diagnostic group}
+# values are from renate 11/5/19
+# #Cohen's D
+# byGroup <- data.frame(variable=c("Depression","Anxiety","Substance","Schizophrenia"),d=c(.411,.246,.419,.703),lb=c(.18,.025,.206,.272),ub=c(.643,.466,.632,1.133))
+# r
+byGroup <- data.frame(variable=c("Depression","Anxiety","Substance Use","Schizophrenia"),d=c(-.201,-.122,-.205,-.332),ub=c(-.09,-.013,-.103,-.135),lb=c(-.306,-.227,-.301,-.493))
+
+tabletext <- cbind(
+  # c(expr(atop("Depression",italic("N = 146"))),"Anxiety (N = 174)","Substance (N = 210)","Schizophrenia (N = 13?)")
+  c(expr("Depression\n(N = 146)"),expr("Anxiety\n(N = 174)"),expr("Substance\n(N = 210)"),expr("Schizophrenia\n(N = 25)")) 
+)
+
+png(paste(workdir,"GlobalCT_forestByDiagnosticGroups_r.png",sep=""),height=4,width=8,res=300,units="in")
+print( forestplot(tabletext,
+        mean =byGroup$d,
+        lower=byGroup$lb,
+        upper=byGroup$ub,
+        boxsize=.12,
+        txt_gp = fpTxtGp( ticks=gpar(fontfamily="", cex=1), xlab=gpar(fontfamily="", cex=1.25) ),
+         xlab="Standardized Beta" ) )
+dev.off()
+```
+
+
+### Cortical thickness/surface area Glasser parcel-wise analysis
+P_BF
+```{r P structural}
+#predict P_B with each Glasser parcel CT (sex as covariate)
+cCT_P_B <- data.frame(bval=double(),pval=double(),se=double())
+for (ROI in 17:376){
+  tmpmodel=lm(scale(corrCT[[ROI]])~scale(P_B)+sex, corrCT)
+  b <- summary(tmpmodel)$coefficients[2,1]
+  p <- summary(tmpmodel)$coefficients[2,4]
+  se <- summary(tmpmodel)$coefficients[2,2]
+  cCT_P_B[nrow(cCT_P_B)+1,] <- c(b,p,se)
+  row.names(cCT_P_B)[nrow(cCT_P_B)] <- names(corrCT)[[ROI]]
+}
+#FDR correction
+cCT_P_B <- transform(cCT_P_B, adj.p = p.adjust(pval,method="BH"))
+sum(cCT_P_B$adj.p<0.05)
+
+#predict P_B with each Glasser parcel SA (sex as covariate)
+SA_P_B <- data.frame(bval=double(),pval=double(),se=double())
+for (ROI in 17:376){
+  tmpmodel=lm(scale(SA[[ROI]])~scale(P_B)+sex, SA)
+  b <- summary(tmpmodel)$coefficients[2,1]
+  p <- summary(tmpmodel)$coefficients[2,4]
+  se <- summary(tmpmodel)$coefficients[2,2]
+  SA_P_B[nrow(SA_P_B)+1,] <- c(b,p,se)
+  row.names(SA_P_B)[nrow(SA_P_B)] <- names(SA)[[ROI]]
+}
+#FDR correction
+SA_P_B <- transform(SA_P_B, adj.p = p.adjust(pval,method="BH"))
+sum(SA_P_B$adj.p<0.05)
+```
+
+EXT_CF
+```{r EXT structural}
+#predict EXT_CF with each Glasser parcel CT (sex as covariate)
+cCT_EXT_CF <- data.frame(bval=double(),pval=double(),se=double())
+for (ROI in 17:376){
+  tmpmodel=lm(scale(corrCT[[ROI]])~scale(EXT_CF)+sex, corrCT)
+  b <- summary(tmpmodel)$coefficients[2,1]
+  p <- summary(tmpmodel)$coefficients[2,4]
+  se <- summary(tmpmodel)$coefficients[2,2]
+  cCT_EXT_CF[nrow(cCT_EXT_CF)+1,] <- c(b,p,se)
+  row.names(cCT_EXT_CF)[nrow(cCT_EXT_CF)] <- names(corrCT)[[ROI]]
+}
+#FDR correction
+cCT_EXT_CF <- transform(cCT_EXT_CF, adj.p = p.adjust(pval,method="BH"))
+sum(cCT_EXT_CF$adj.p<0.05)
+
+#predict EXT_CF with each Glasser parcel SA (sex as covariate)
+SA_EXT_CF <- data.frame(bval=double(),pval=double(),se=double())
+for (ROI in 17:376){
+  tmpmodel=lm(scale(SA[[ROI]])~scale(EXT_CF)+sex, SA)
+  b <- summary(tmpmodel)$coefficients[2,1]
+  p <- summary(tmpmodel)$coefficients[2,4]
+  se <- summary(tmpmodel)$coefficients[2,2]
+  SA_EXT_CF[nrow(SA_EXT_CF)+1,] <- c(b,p,se)
+  row.names(SA_EXT_CF)[nrow(SA_EXT_CF)] <- names(SA)[[ROI]]
+}
+#FDR correction
+SA_EXT_CF <- transform(SA_EXT_CF, adj.p = p.adjust(pval,method="BH"))
+sum(SA_EXT_CF$adj.p<0.05)
+```
+
+INT_CF
+```{r INT structural}
+#predict INT_CF with each Glasser parcel CT (sex as covariate)
+cCT_INT_CF <- data.frame(bval=double(),pval=double(),se=double())
+for (ROI in 17:376){
+  tmpmodel=lm(scale(corrCT[[ROI]])~scale(INT_CF)+sex, corrCT)
+  b <- summary(tmpmodel)$coefficients[2,1]
+  p <- summary(tmpmodel)$coefficients[2,4]
+  se <- summary(tmpmodel)$coefficients[2,2]
+  cCT_INT_CF[nrow(cCT_INT_CF)+1,] <- c(b,p,se)
+  row.names(cCT_INT_CF)[nrow(cCT_INT_CF)] <- names(corrCT)[[ROI]]
+}
+#FDR correction
+cCT_INT_CF <- transform(cCT_INT_CF, adj.p = p.adjust(pval,method="BH"))
+sum(cCT_INT_CF$adj.p<0.05)
+
+#predict INT_CF with each Glasser parcel SA (sex as covariate)
+SA_INT_CF <- data.frame(bval=double(),pval=double(),se=double())
+for (ROI in 17:376){
+  tmpmodel=lm(scale(SA[[ROI]])~scale(INT_CF)+sex, SA)
+  b <- summary(tmpmodel)$coefficients[2,1]
+  p <- summary(tmpmodel)$coefficients[2,4]
+  se <- summary(tmpmodel)$coefficients[2,2]
+  SA_INT_CF[nrow(SA_INT_CF)+1,] <- c(b,p,se)
+  row.names(SA_INT_CF)[nrow(SA_INT_CF)] <- names(SA)[[ROI]]
+}
+#FDR correction
+SA_INT_CF <- transform(SA_INT_CF, adj.p = p.adjust(pval,method="BH"))
+sum(SA_INT_CF$adj.p<0.05)
+```
+
+THD_CF
+```{r THD structural}
+#predict THD_CF with each Glasser parcel CT (sex as covariate)
+cCT_THD_CF <- data.frame(bval=double(),pval=double(),se=double())
+for (ROI in 17:376){
+  tmpmodel=lm(scale(corrCT[[ROI]])~scale(THD_CF)+sex, corrCT)
+  b <- summary(tmpmodel)$coefficients[2,1]
+  p <- summary(tmpmodel)$coefficients[2,4]
+  se <- summary(tmpmodel)$coefficients[2,2]
+  cCT_THD_CF[nrow(cCT_THD_CF)+1,] <- c(b,p,se)
+  row.names(cCT_THD_CF)[nrow(cCT_THD_CF)] <- names(corrCT)[[ROI]]
+}
+#FDR correction
+cCT_THD_CF <- transform(cCT_THD_CF, adj.p = p.adjust(pval,method="BH"))
+sum(cCT_THD_CF$adj.p<0.05)
+
+#predict THD_CF with each Glasser parcel SA (sex as covariate)
+SA_THD_CF <- data.frame(bval=double(),pval=double(),se=double())
+for (ROI in 17:376){
+  tmpmodel=lm(scale(SA[[ROI]])~scale(THD_CF)+sex, SA)
+  b <- summary(tmpmodel)$coefficients[2,1]
+  p <- summary(tmpmodel)$coefficients[2,4]
+  se <- summary(tmpmodel)$coefficients[2,2]
+  SA_THD_CF[nrow(SA_THD_CF)+1,] <- c(b,p,se)
+  row.names(SA_THD_CF)[nrow(SA_THD_CF)] <- names(SA)[[ROI]]
+}
+#FDR correction
+SA_THD_CF <- transform(SA_THD_CF, adj.p = p.adjust(pval,method="BH"))
+sum(SA_THD_CF$adj.p<0.05)
+```
+
+### CT: Explore overlapping parcels
+```{r overlaps}
+# ARK
+sum(cCT_INT_CF$adj.p<.05 & cCT_EXT_CF$adj.p>.05 & cCT_THD_CF$adj.p>.05 & cCT_P_B$adj.p>.05)
+sum(cCT_EXT_CF$adj.p<.05 & cCT_INT_CF$adj.p>.05 & cCT_THD_CF$adj.p>.05 & cCT_P_B$adj.p>.05)
+sum(cCT_THD_CF$adj.p<.05 & cCT_INT_CF$adj.p>.05 & cCT_EXT_CF$adj.p>.05 & cCT_P_B$adj.p>.05)
+sum(cCT_P_B$adj.p<.05 & cCT_INT_CF$adj.p>.05 & cCT_EXT_CF$adj.p>.05 & cCT_THD_CF$adj.p>.05)
+
+sum(cCT_INT_CF$adj.p<.05 & cCT_P_B$adj.p>.05)
+sum(cCT_EXT_CF$adj.p<.05 & cCT_P_B$adj.p>.05)
+sum(cCT_THD_CF$adj.p<.05 & cCT_P_B$adj.p>.05)
+
+sum(cCT_INT_CF$adj.p<.05 & cCT_P_B$adj.p<.05)/sum(cCT_P_B$adj.p<.05)
+sum(cCT_EXT_CF$adj.p<.05 & cCT_P_B$adj.p<.05)/sum(cCT_P_B$adj.p<.05)
+sum(cCT_THD_CF$adj.p<.05 & cCT_P_B$adj.p<.05)/sum(cCT_P_B$adj.p<.05)
+
+```
+
+### CT: Explore parcels associated with each of the 3 CFs factor while controling for the others
+```{r CT unique parcels}
+#predict P_B with each Glasser parcel CT (sex as covariate)
+cCT_3CFs_INT <- data.frame(bval=double(),pval=double(),se=double())
+cCT_3CFs_EXT <- data.frame(bval=double(),pval=double(),se=double())
+cCT_3CFs_THD <- data.frame(bval=double(),pval=double(),se=double())
+cCT_BI_INT <- data.frame(bval=double(),pval=double(),se=double())
+cCT_BI_EXT <- data.frame(bval=double(),pval=double(),se=double())
+
+for (ROI in 21:380){
+
+  tmpmodel <- lm(scale(corrCT[[ROI]])~scale(INT_CF)+scale(EXT_CF)+scale(THD_CF)+sex, corrCT)
+
+  b <-  summary(tmpmodel)$coefficients[2,1]
+  p <-  summary(tmpmodel)$coefficients[2,4]
+  se <- summary(tmpmodel)$coefficients[2,2]
+  cCT_3CFs_INT[nrow(cCT_3CFs_INT)+1,] <- c(b,p,se)
+  row.names(cCT_3CFs_INT)[nrow(cCT_3CFs_INT)] <- names(corrCT)[[ROI]]
+
+  b <-  summary(tmpmodel)$coefficients[3,1]
+  p <-  summary(tmpmodel)$coefficients[3,4]
+  se <- summary(tmpmodel)$coefficients[3,2]
+  cCT_3CFs_EXT[nrow(cCT_3CFs_EXT)+1,] <- c(b,p,se)
+  row.names(cCT_3CFs_EXT)[nrow(cCT_3CFs_EXT)] <- names(corrCT)[[ROI]]
+
+  b <-  summary(tmpmodel)$coefficients[4,1]
+  p <-  summary(tmpmodel)$coefficients[4,4]
+  se <- summary(tmpmodel)$coefficients[4,2]
+  cCT_3CFs_THD[nrow(cCT_3CFs_THD)+1,] <- c(b,p,se)
+  row.names(cCT_3CFs_THD)[nrow(cCT_3CFs_THD)] <- names(corrCT)[[ROI]]
+  
+  tmpmodel <- lm(scale(corrCT[[ROI]])~scale(INT_B)+scale(EXT_B)+sex, corrCT)
+  
+  b <-  summary(tmpmodel)$coefficients[2,1]
+  p <-  summary(tmpmodel)$coefficients[2,4]
+  se <- summary(tmpmodel)$coefficients[2,2]
+  cCT_BI_INT[nrow(cCT_BI_INT)+1,] <- c(b,p,se)
+  row.names(cCT_BI_INT)[nrow(cCT_BI_INT)] <- names(corrCT)[[ROI]]
+
+  b <-  summary(tmpmodel)$coefficients[3,1]
+  p <-  summary(tmpmodel)$coefficients[3,4]
+  se <- summary(tmpmodel)$coefficients[3,2]
+  cCT_BI_EXT[nrow(cCT_BI_EXT)+1,] <- c(b,p,se)
+  row.names(cCT_BI_EXT)[nrow(cCT_BI_EXT)] <- names(corrCT)[[ROI]]
+  
+}
+
+#FDR correction
+cCT_3CFs_INT <- transform(cCT_3CFs_INT, adj.p = p.adjust(pval,method="BH"))
+sum(cCT_3CFs_INT$adj.p<0.05)
+cCT_3CFs_EXT <- transform(cCT_3CFs_EXT, adj.p = p.adjust(pval,method="BH"))
+sum(cCT_3CFs_EXT$adj.p<0.05)
+cCT_3CFs_THD <- transform(cCT_3CFs_THD, adj.p = p.adjust(pval,method="BH"))
+sum(cCT_3CFs_THD$adj.p<0.05)
+
+cCT_BI_INT <- transform(cCT_BI_INT, adj.p = p.adjust(pval,method="BH"))
+sum(cCT_BI_INT$adj.p<0.05)
+cCT_BI_EXT <- transform(cCT_BI_EXT, adj.p = p.adjust(pval,method="BH"))
+sum(cCT_BI_EXT$adj.p<0.05)
+
+#write out for EXT, only factor with regions passing FDR threshold
+write.csv(cCT_3CFs_EXT[c("bval","adj.p")], file=paste(workdir,"Glasser_EXT_ctrl.INT.THD.sex.csv",sep=""), row.names=TRUE)
+write.csv(cCT_BI_EXT[c("bval","adj.p")], file=paste(workdir,"Glasser_EXTBI_ctrl.INT.sex.csv",sep=""), row.names=TRUE)
+
+```
+
+## Plots
+
+## forest plots for subcortical regions
+```{r aseg plots}
+
+df_list <- list(aseg_P_B,aseg_INT_CF,aseg_EXT_CF,aseg_THD_CF)
+names <- c("aseg_P_B","aseg_INT_CF","aseg_EXT_CF","aseg_THD_CF")
+
+for ( i in 1:length(df_list) ) {
+  
+  df <- df_list[[i]]
+  
+  bilat <- df[!grepl("Left", rownames(df)) & !grepl("Right", rownames(df)) & !grepl("Bilat", rownames(df)), ]
+  subset1 <- rbind(df[grepl("Bilat",rownames(df)),],bilat)
+  subset2 <- rbind(df[grepl("Left",rownames(df)),],bilat)
+  subset3 <- rbind(df[grepl("Right",rownames(df)),],bilat)
+  
+  tabletext <- cbind(
+    sub("Left.","",rownames(subset2))
+  )
+  
+  # highlight values surviving correction
+  fpType_list <- list()
+  for ( j in 1:nrow(subset1) ){
+    if(subset2[j,"adj.p"]<.05){ t2 <- fpDrawDiamondCI } else { t2 <- fpDrawNormalCI }
+    if(subset3[j,"adj.p"]<.05){ t3 <- fpDrawDiamondCI } else { t3 <- fpDrawNormalCI }
+    fpType_list[[j]]=list(t2,t3)
+  }
+  # v1, grouped by R/L
+  png(paste(workdir,"forest_subcort_",names[i],"_RL.png",sep=""),height=6,width=8,res=300,units="in")
+  print(forestplot(tabletext,
+             legend=c("Left", "Right"),
+            fn.ci_norm=fpType_list,
+          mean  = cbind(subset2$bval, subset3$bval),
+          lower = cbind(subset2$bval - 1.96*subset2$se, subset3$bval - 1.96*subset3$se),
+          upper = cbind(subset2$bval + 1.96*subset2$se, subset3$bval + 1.96*subset3$se),
+          col=fpColors(box=c("black","lightblue")),
+          boxsize=.15,
+             xlab="Standardized Beta" ))
+  dev.off()
+  
+  ### just bilateral
+  # highlight values surviving correction
+  fpType_list <- list()
+  for ( j in 1:nrow(subset1) ){
+    if(subset1[j,"adj.p"]<.05){ t1=fpDrawDiamondCI } else { t1=fpDrawNormalCI }
+    fpType_list[[j]]=list(t1)
+  }
+  png(paste(workdir,"forest_subcort_",names[i],"_bilat.png",sep=""),height=6,width=8,res=300,units="in")
+  print(forestplot(tabletext,
+          mean  = cbind(subset1$bval),
+          lower = cbind(subset1$bval - 1.96*subset1$se),
+          upper = cbind(subset1$bval + 1.96*subset1$se),
+          boxsize=.15,
+             xlab="Standardized Beta" ))
+  dev.off()
+  
+  
+}
+```
+
+### correlations between factor parcelwise CT effects (fig. 3a)
+```{r CT CF cor plot}
+corrCF <- subset(cCT_P_B, select=c("bval"))
+corrCF <- cbind(corrCF, cCT_INT_CF$bval, cCT_EXT_CF$bval, cCT_THD_CF$bval)
+names(corrCF) <- c('P','INT','EXT','THD')
+ggcorr(corrCF, method=c("everything","pearson"), label="TRUE", label_round=4)
+```
+
+### correlations between factors (fig. 3b)
+```{r CF cor plot}
+corrP <- subset(TOT,select=c("P_B"))
+corrP <- cbind(corrP, TOT$INT_CF, TOT$EXT_CF, TOT$THD_CF)
+names(corrP) <- c('P','INT','EXT','THD')
+ggcorr(corrP, method=c("everything","pearson"), label="TRUE", label_round=4)
+```
+
+
+
+

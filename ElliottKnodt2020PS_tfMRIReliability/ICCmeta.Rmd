@@ -1,0 +1,323 @@
+---
+title: "task-fMRI reliability meta-analysis"
+author: "Annchen Knodt"
+date: "8/9/2019"
+output:
+  html_document: default
+  pdf_document: default
+---
+# load libraries
+```{r load, include=FALSE}
+library(dplyr)
+library(robumeta)
+library(metafor)
+library("psych")
+```
+
+## Read and check data
+```{r data}
+workdir <- 'H:/Projects/Annchen/General/Reliability/MetaAnalysis/'
+data <- read.csv(paste0(workdir, 'ReliabilityTable.csv'))
+table(data$PaperID)
+hist(data$nSubjects)
+table(data$Design)
+hist(data$NumCitationsPerYear)
+hist(data$TaskLength)
+hist(data$Interval)
+table(data$TaskType)
+table(data$Healthy)
+table(data$ThrICC)
+table(data$ROIType) 
+table(data$SummaryICC)
+table(data$Cortical) 
+hist(data$ICC)
+hist(data$ICCse)
+boxplot(data=data, ICC~ThrICC)
+
+```
+# Prep data
+```{r prep}
+# remove ICCse and p. since they aren't present for every study, we will estimate them using Fisher r-to-Z instead
+data <- data[, !(names(data) %in% c("ICCse", "p"))]
+# Fisher r-to-Z transform > results go to yi and vi
+data <- escalc(data=data, measure="ZCOR", ri=ICC, ni=nSubjects, slab=PaperID)
+# create experiment ID variable to label each study+task uniquely ( i.e., "substudy")
+data$ExpID <- as.factor(paste(data$PaperID, data$Task, data$Interval, data$Healthy, sep=";"))
+# create ICC ID variable to label each individual ICC estimate uniquely
+data$iccID <- rownames(data)
+data$ThrICC <- as.factor(data$ThrICC)
+# number of papers
+length(unique(data$PaperID))
+# number of unique experiments
+length(unique(data$ExpID))
+# number of unique Tasks
+length(unique(data$Task))
+# number of ICCs
+nrow(data)
+# number of cites - would make more sense to have a relational database for many of these things, but hey, this works
+data$paperCite <- as.factor(paste(data$PaperID, data$NumCitations, sep=";"))
+data$paperCiteYear <- as.factor(paste(data$PaperID, data$NumCitationsPerYear, sep=";"))
+sum(as.numeric(do.call(rbind, strsplit(as.character(unique(data$paperCite)), ";"))[, 2]))
+mean(as.numeric(do.call(rbind, strsplit(as.character(unique(data$paperCite)),";"))[, 2]))
+mean(as.numeric(do.call(rbind, strsplit(as.character(unique(data$paperCiteYear)),";"))[, 2]))
+# write out for stat check
+write.csv(data[, !(names(data) %in% c("yi", "vi"))], file=paste0(workdir, 'ReliabilityTable_forStatCheck.csv'))
+
+```
+
+# Moderator analysis
+```{r moderator}
+
+res.mod <- rma.mv(yi,vi, random = ~1 | PaperID/ExpID/iccID, mods = ~ Design+NumCitationsPerYear+TaskLength+Interval+TaskType+ThrICC+ROIType+Cortical+Healthy, data=data )
+summary(res.mod)
+
+# test for effects of each moderator with more than one level
+anova(res.mod, btt=2:3) # design
+anova(res.mod, btt=7:14) # task type
+anova(res.mod, btt=16:19) # ROI type
+
+```
+
+# Collapse across substudies, specifying intra-substudy correlations
+```{r collapse}
+
+### define function to collapse/summarize papers at level specificed by "levelName" (e.g., "ExpID")
+summarize_papers <- function(subset, r, levelName) {
+  
+  paper_summaries <- data.frame(
+    PaperID = character(), ExpID = character(),
+    ICC_mean = double(), ICC_lb = double(), ICC_ub = double(),
+    zICC_mean = double(), zICC_var = double(),
+    nSub = integer(), nICC = integer(),
+    TaskLength = double(),
+    Interval = double(),
+    TaskType = character(),
+    Healthy = character(),
+    ThrICC = character()
+  )
+  
+  for(i in 1:length(unique(subset[, paste(levelName)]))) { # loop through papers
+    paper_all <- subset[which(subset[, paste(levelName)] == unique(subset[, paste(levelName)])[i]), ]
+    nICCs <- nrow(paper_all)
+    # calculated variance of mean per this formula: (1/m)^2 * ( sum(V) + sumpairs(r*sqrt(V1)*sqrt(V2)) ) 
+    # https://www.meta-analysis.com/downloads/Meta-analysis%20Studies%20with%20multiple%20subgroups%20or%20outcomes.pdf
+    cov <- 0
+    # first get covariance by summing over all pairs
+    for( j in 1:nICCs ){
+      for( k in 1:nICCs ){ 
+        if( k!=j ){
+          cov <- cov + r * sqrt(paper_all[j, "vi"]) * sqrt(paper_all[k, "vi"]) 
+        }
+        # vi is variance estimated from fisher transform - depends only on sample size so should be the same for all entries within a study 
+      }
+    }
+    var <- (1 / nICCs)^2 * (sum(paper_all[, "vi"]) + cov)
+    mean <- mean(paper_all[, "yi"])
+    paper_summaries <- rbind(
+      paper_summaries,
+      data.frame(
+        ExpID = unique(subset[, paste(levelName)])[i], 
+        PaperID = paper_all[1, "PaperID"],
+        ICC_mean = fisherz2r(mean),
+        ICC_lb = fisherz2r(mean - sqrt(var)),
+        ICC_ub = fisherz2r(mean + sqrt(var)),
+        zICC_mean = mean, 
+        zICC_var = var,
+        nICC = nrow(paper_all), 
+        nSub = paper_all[1, "nSubjects"],
+        TaskLength = paper_all[1, "TaskLength"],
+        Interval = paper_all[1, "Interval"],
+        TaskType = paper_all[1, "TaskType"],
+        Healthy = paper_all[1, "Healthy"],
+        Design = paper_all[1, "Design"],
+        ThrICC = paper_all[1, "ThrICC"])
+      )
+     
+  } 
+  
+  return(paper_summaries)
+  
+}
+
+### collapse across substudies and store for forest plot
+
+## collapse across substudies, separately for studies thresholding on ICC vs non, assuming complete non-independence within substudies
+paper_summaries_ThrICC1_r1 <- summarize_papers(data[which(data$ThrICC==1), ], 1, "ExpID")
+paper_summaries_ThrICC0_r1 <- summarize_papers(data[which(data$ThrICC==0), ], 1, "ExpID")
+
+## collapse across substudies, separately for studies thresholding on ICC vs non, assuming complete independence within substudies
+paper_summaries_ThrICC1_r0 <- summarize_papers(data[which(data$ThrICC==1), ], 0, "ExpID")
+paper_summaries_ThrICC0_r0 <- summarize_papers(data[which(data$ThrICC==0), ], 0, "ExpID")
+
+## reorder for forest plot, then combine (note that ordering in the plot starts from the bottom)
+paper_summaries_ThrICC1_r1 <- paper_summaries_ThrICC1_r1[order(as.character(paper_summaries_ThrICC1_r1$ExpID), decreasing=TRUE), ] 
+paper_summaries_ThrICC0_r1 <- paper_summaries_ThrICC0_r1[order(as.character(paper_summaries_ThrICC0_r1$ExpID), decreasing=TRUE), ] 
+paper_summaries_ThrICC1_r0 <- paper_summaries_ThrICC1_r0[order(as.character(paper_summaries_ThrICC1_r0$ExpID), decreasing=TRUE), ] 
+paper_summaries_ThrICC0_r0 <- paper_summaries_ThrICC0_r0[order(as.character(paper_summaries_ThrICC0_r0$ExpID), decreasing=TRUE), ] 
+paper_summaries_ThrICC_r1 <- rbind(paper_summaries_ThrICC1_r1, paper_summaries_ThrICC0_r1)
+paper_summaries_ThrICC_r0 <- rbind(paper_summaries_ThrICC1_r0, paper_summaries_ThrICC0_r0)
+
+### calculate some stats
+
+## calculate total number of subjects, will assume that summing the unique sample sizes within each paper will achieve this
+paper_summaries_all <- summarize_papers(data, 0, "ExpID")
+paper_summaries_all$samples <- as.factor(paste(paper_summaries_all$PaperID, paper_summaries_all$nSub, sep=";"))
+sum(as.numeric(do.call(rbind, strsplit(as.character(unique(paper_summaries_all$samples)), ";"))[, 2]))
+# print out to double check that this works
+paper_summaries_all[order(paper_summaries_all$samples), c("ExpID", "samples")]
+# decisions based on this: subtract 25 for Plichta2012/2014 redundancy
+#                          add 7 bc Manoach2001 h & c samples are both N=7
+#                          subtract 16 to account for overlap in Keren2018 (this might not be quite right but oh well)
+#                          add 10 bc Clement2009 h & c samples are both N=10
+# TOTAL: subtract 24
+
+# average substudy sample size
+mean(paper_summaries_ThrICC0_r1$nSub)
+mean(paper_summaries_ThrICC1_r1$nSub)
+median(paper_summaries_ThrICC0_r1$nSub)
+median(paper_summaries_ThrICC1_r1$nSub)
+
+# percentage of ICCs in each range
+table(paper_summaries_ThrICC0_r1$ICC_mean < .75) / nrow(paper_summaries_ThrICC0_r1)
+table(paper_summaries_ThrICC0_r1$ICC_mean < .6) / nrow(paper_summaries_ThrICC0_r1)
+table(paper_summaries_ThrICC0_r1$ICC_mean < .4) / nrow(paper_summaries_ThrICC0_r1)
+
+# sensitivity analyses with papers that thresholding was not clean-cut
+# note that blockland paper has both (questionably) thresholded and un-thresholded ICCs, so including it in the un-thresholded group
+paperIDs_questionable <- c("Erk2013", "Aron2006", "Blokland2017")
+paper_summaries_ThrICC1_r1_excQuestionable <- summarize_papers(data[which(data$ThrICC == 1 & !(data$PaperID %in% paperIDs_questionable ) ), ], 1, "ExpID")
+paper_summaries_ThrICC0_r1_incQuestionable <- summarize_papers(data[which(data$ThrICC == 0 | (data$PaperID %in% paperIDs_questionable ) ), ], 1, "ExpID")
+res.thr1.excQuestionable <- rma.mv(zICC_mean, zICC_var, random = ~1 | PaperID/ExpID, data=paper_summaries_ThrICC1_r1_excQuestionable )
+res.thr0.incQuestionable <- rma.mv(zICC_mean, zICC_var, random = ~1 | PaperID/ExpID, data=paper_summaries_ThrICC0_r1_incQuestionable )
+fisherz2r(summary(res.thr1.excQuestionable)$b); fisherz2r(summary(res.thr1.excQuestionable)$ci.ub); fisherz2r(summary(res.thr1.excQuestionable)$ci.lb)
+fisherz2r(summary(res.thr0.incQuestionable)$b); fisherz2r(summary(res.thr0.incQuestionable)$ci.ub); fisherz2r(summary(res.thr0.incQuestionable)$ci.lb)
+
+```
+
+
+
+# Forest plots with subgroups
+Per http://www.metafor-project.org/doku.php/plots:forest_plot_with_subgroups
+For details on the z to r transf for plotting: http://r.789695.n4.nabble.com/z-to-r-transformation-within-print-rma-uni-and-forest-from-the-package-metafor-td948514.html
+Grouped by "thresholded on ICC"
+```{r forest}
+
+r <- 1 # assume independence (r=0) or non-independence (r=1) of ICCs within a substudy
+if(r==1){
+  dat  <- paper_summaries_ThrICC_r1
+  dat0 <- paper_summaries_ThrICC0_r1
+  dat1 <- paper_summaries_ThrICC1_r1
+} else {
+  dat  <- paper_summaries_ThrICC_r0
+  dat0 <- paper_summaries_ThrICC0_r0
+  dat1 <- paper_summaries_ThrICC1_r0  
+}
+
+### decrease margins so the full space is used, and other graphical parameters
+par(mar=c(4, 4, 1, 2))
+xmin <- -3.7 
+xmax <- 2
+xcol <- c(-2.5, -1.9, -1.6, -1.3, -1)
+ymax <- nrow(dat) + 8
+cex_sm <- .65
+cex_md <- .75
+nThr1 <- summary(dat$ThrICC)[2]
+subgp_row_start <- c(1, nThr1 + 5)
+subgp_row_end <- c(nThr1, ymax - 4)
+
+### set up data for text columns
+ExpID_split <- do.call(rbind, strsplit(as.character(dat$ExpID), ";"))
+paper <- sub("20", ", 20", ExpID_split[, 1])
+task <- ExpID_split[, 2]
+interval <- ExpID_split[, 3]
+hc <- ExpID_split[, 4]
+
+### fit random-effects model (use slab argument to define study labels)
+## the study labels in the plot are defined by the slab argument here. if they are non-unique, rma calls the "make-unique" function to append consecutive integers 
+# no moderators, so we can get an estimate of the grand mean of all studies
+res.grouped <- rma.mv(zICC_mean, zICC_var, random = ~1 | PaperID/ExpID, data=dat, slab=paper )
+fisherz2r(summary(res.grouped)$b)
+fisherz2r(summary(res.grouped)$ci.ub) 
+fisherz2r(summary(res.grouped)$ci.lb)
+
+#### FOREST PLOT ####
+
+png(paste0(workdir, 'forest_groupedThrICC_exp_r', r, '.png', sep=""), height=13, width=10, res=300, units="in")
+
+## set up forest plot (rows argument is used to specify exactly in which rows the outcomes will be plotted)
+forest(res.grouped, transf = transf.ztor, 
+       xlim = c(xmin, xmax), ylim = c(-1, ymax + 1), 
+       rows = c(subgp_row_start[1]:subgp_row_end[1], subgp_row_start[2]:subgp_row_end[2]),
+       xlab = "ICC", mlab = "", ilab = cbind(task, interval, hc, dat$nSub, dat$nICC), ilab.xpos = xcol, 
+       cex = cex_sm, cex.lab= cex_md, cex.axis = cex_md, 
+       addfit = FALSE, digits = 3 )
+
+### set font expansion factor , use bold italic, and save original settings in object 'op'
+op <- par(cex=cex_sm, font=4)
+ 
+### add text for the subgroups
+text(xmin, c(subgp_row_end[1] + 1, subgp_row_end[2] - 1), pos=4, c("Thresholded on ICC", "Not thresholded on ICC" ))
+ 
+### switch to bold font
+par(font=2)
+ 
+### add column headings to the plot
+text(xmin, ymax, "Author, Year",  pos=4)
+text(xcol[1], ymax, "Task")
+text(xcol[2], ymax, "Interval")
+text(xcol[3], ymax, "Healthy")
+text(xcol[4], ymax, "# Subjects")
+text(xcol[5], ymax, "# ICCs")
+text(xmax, ymax, "ICC [95% CI]", pos=2)
+ 
+### set par back to the original settings
+par(op)
+ 
+### fit random-effects model in the subgroups
+res.thr0 <- rma.mv(zICC_mean, zICC_var, random = ~1 | PaperID/ExpID, data=dat0 )
+res.thr1 <- rma.mv(zICC_mean, zICC_var, random = ~1 | PaperID/ExpID, data=dat1 )
+
+## I2, per http://www.metafor-project.org/doku.php/tips:i2_multilevel_multivariate
+W <- diag(1 / dat0$zICC_var)
+X <- model.matrix(res.thr0)
+P <- W - W %*% X %*% solve(t(X) %*% W %*% X) %*% t(X) %*% W
+I2.thr0 <- 100 * sum(res.thr0$sigma2) / (sum(res.thr0$sigma2) + (res.thr0$k - res.thr0$p) / sum(diag(P)))
+W <- diag(1 / dat1$zICC_var)
+X <- model.matrix(res.thr1)
+P <- W - W %*% X %*% solve(t(X) %*% W %*% X) %*% t(X) %*% W
+I2.thr1 <- 100 * sum(res.thr1$sigma2) / (sum(res.thr1$sigma2) + (res.thr1$k - res.thr1$p) / sum(diag(P)))
+
+### add summary polygons for the subgroups
+addpoly(res.thr1, row=subgp_row_start[1] - 1.5, cex=cex_md, transf=transf.ztor, mlab="", digits=3)
+addpoly(res.thr0, row=subgp_row_start[2] - 1.5, cex=cex_md, transf=transf.ztor, mlab="", digits=3)
+ 
+### add text with Q-value, dfs, p-value, and I^2 statistic for subgroups
+text(xmin, subgp_row_start[1]-1.5, pos=4, cex=cex_md, bquote(paste("RE Model for Subgroup (Q = ",
+     .(formatC(res.thr1$QE, digits=2, format="f")), ", df = ", .(res.thr1$k - res.thr1$p),
+     ", p = ", .(formatC(res.thr1$QEp, digits=2, format="f")), "; ", I^2, " = ",
+     .(formatC(I2.thr1, digits=1, format="f")), "%)")))
+text(xmin, subgp_row_start[2]-1.5, pos=4, cex=cex_md, bquote(paste("RE Model for Subgroup (Q = ",
+     .(formatC(res.thr0$QE, digits=2, format="f")), ", df = ", .(res.thr0$k - res.thr0$p),
+     ", p = ", .(formatC(res.thr0$QEp, digits=2, format="f")), "; ", I^2, " = ",
+     .(formatC(I2.thr0, digits=1, format="f")), "%)")))
+
+dev.off()
+```
+
+# funnel plot & Egger test
+```{r funnel}
+
+# cannot run regtest for publication bias on multilevel models (has not been implemented), so make a funnel plot without nesting here and run the test
+# to check for publication bias it probably also makes the most sense to include each paper only once, so consider that as well
+# all of these plot one point for every "substudy"
+res.grouped.paperLevelOnly <- rma(zICC_mean, zICC_var, mods = ~ Design+TaskLength+Interval+TaskType+Healthy+ThrICC, data=dat, slab=paper )
+rt <- (regtest(res.grouped.paperLevelOnly, model="rma", predictor="sei"))
+png(paste0(workdir, 'funnel_preGrouped_paperOnly_r', r, '.png', sep=""), height=6, width=8, res=300, units="in")
+  funnel(res.grouped.paperLevelOnly, 
+         main="pre-grouped ICCs, paper level only, with moderators", 
+         sub=paste0("test for asymmetry p=", round(rt$pval, 3), "; Z=", round(rt$zval, 3)), 
+         atransf=transf.ztor)
+dev.off()
+
+ 
+```

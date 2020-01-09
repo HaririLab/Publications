@@ -1,0 +1,393 @@
+---
+title: "getICCs_ALL"
+author: "Annchen Knodt"
+date: "1/9/2020"
+output: html_document
+---
+
+```{r libraries}
+library(psych)
+library(ggplot2)
+library(tidyverse)
+library(gplots)
+library(RColorBrewer)
+```
+
+## Options
+```{r options}
+study <- "DBIS" # HCP or DBIS
+workdir <- paste0("H:/Projects/Annchen/", study, "/TestRetest/")
+hemi <- "R" # for primary anatomical ROI analysis: "L" "R" or "bilat"
+drop1021 <- "no" # (low outlier SNR for mid task in Dunedin, set to "no" for HCP)
+includeTwins <- "no" # HCP only: "yes" to include all subjects or "no" to include just one from each sib pair
+controlSTAI <- "no" # Dunedin only, covary for state anxiety?
+```
+
+## Input files
+# format: ID (as <STUDY>###), time, data columns: contrasts x ROIs ###############
+```{r read data}
+data <- read.csv(paste0(workdir, "list_out_anatomical_", hemi, ".csv"))
+contrasts <- read.csv(paste0(workdir, "list_contrasts.csv"), header=FALSE)
+rois <- read.csv(paste0(workdir, "list_AnatomicalROIs_bilat.csv"), header=FALSE)
+ids_retest <- read.csv(paste0(workdir, "ids_retest.txt"), header=FALSE)
+interval <- read.table(paste0(workdir, "RetestInterval_days.txt"), header=TRUE)
+if( study == "DBIS" ) {
+	stai <- read.table(paste0(workdir, "STAI.txt"), header=TRUE) # state anxiety, Dunedin only
+} else {
+	# file containing IDs only of twins to use (chose twin with most data, or first ID if both had complete data)
+	ids_retest_noTwins <- read.csv(paste0(workdir,"ids_retest_noTwins.txt"), header=FALSE) 
+}
+```
+
+## Set up variables
+```{r setup}
+if (study == "DBIS" ){
+	if ( drop1021 == "yes" ) { 
+		data  <-  data[data$ID!="DMHDS1021", ]
+	}
+} else { 
+	# for HCP, make sure ID has "HCP" prefix
+	if (!grepl("HCP",data[1,"ID"])) {
+		data$ID = paste0("HCP",data$ID)
+	}
+	if(includeTwins == "no"){
+	  data <- subset(data[with(data[data$ID %in% ids_retest_noTwins$V1, ], order(ID)), ])
+	}
+}
+data_test <- subset(data[with(data, order(ID)), ], time==1)
+data_retest <- subset(data[with(data, order(ID)), ], time==2)
+N_ROI <- length(rois$V2)
+N_con <- length(contrasts$V2)
+contrast_names <- contrasts$V2 
+roi_names <- unlist(strsplit(as.character(rois[, "V2"]), "[.]"))[c(FALSE, TRUE)]
+
+## Define ICC function
+get_ICC_aov <- function(data_combined, cur_var, covariate="interval"){
+	
+	# remove incomplete cases (only present in HCP) ... there must be a better way but this works...
+	incomplete <- ""
+	ct <- 1 
+	for(id in unique(data_combined$ID)){ 
+	  if(sum(is.na(data_combined[data_combined$ID==id, cur_var]))>0) { 
+		incomplete[[ct]] <- id
+		ct <- ct + 1
+	  }  
+	}
+	data_complete <- data_combined[!(data_combined$ID %in% incomplete), ]
+
+    ## calculate ICCs from ANOVA per https://ncss-wpengine.netdna-ssl.com/wp-content/themes/ncss/pdf/Procedures/PASS/Confidence_Intervals_for_Intraclass_Correlation.pdf
+	if(covariate == "interval"){
+   
+	    # calculate MeanSquares controlling for interval
+	    aov <- aov(data_complete[, paste(cur_var)] ~ time + interval + Error(ID / time), data_complete)
+	    s <- summary(aov)
+	    MSE <- s[[2]][[1]][[3]][[2]] # MS residual, additive model
+	} else {
+		if(covariate == "stai"){
+		    # calculate MeanSquares controlling for stai
+		    # here the STAI variable shows up in the ID:time section
+		    aov <- aov(data_complete[, paste(cur_var)] ~ time + as.numeric(post) + Error(ID / time), data_complete)
+		    s <- summary(aov)
+		    MSE <- s[[2]][[1]][[3]][[3]] # MS residual, additive model
+    	} else {
+    		print(paste("Invalid covariate:", covariate))
+    	}
+	}
+
+    # finish ICC calculation
+    MSB <- s[[1]][[1]][[3]][[2]] # MS between subjects, either model    
+    rho <- (MSB-MSE)/(MSB+MSE)
+
+	print(paste("Number of rows in test-retest dataset used for", cur_var, ":", nrow(data_complete))) # number for this task
+
+	return(rho)
+
+}
+```
+
+## Calculate ICCs for primary anatomical ROI analysis
+```{r primary}
+ICCs <- matrix(NA, nrow=N_ROI, ncol=N_con)
+ICCs_scatter <- matrix(nrow=N_ROI * N_con, ncol=4) # data frame for scatter plot
+
+for(i in 1:N_con){ # loop through ROIs
+  for(j in 1:N_ROI){ # loop through contrasts
+  
+    cur_var <- colnames(data)[(i - 1) * N_ROI + j + 2]
+    
+	  data_combined <- rbind(data_retest[, c("ID", "time", cur_var)], data_test[, c("ID", "time", cur_var)])
+    data_combined <- merge(data_combined, interval, by="ID") 
+
+    if (controlSTAI == "yes"){
+    	# one subject is missing STAI so including this will drop that subject!
+    	data_combined <- merge(data_combined, stai, by="ID") 
+    	ICCs[j, i] <- get_ICC_aov(data_combined, cur_var, "stai")
+  	} else {
+  		ICCs[j, i] <- get_ICC_aov(data_combined, cur_var, "interval")
+  	}
+
+    ## also prep for a data frame for scatter plot
+    ICCs_scatter[(j - 1) * N_con + i, 1] <- ICCs[j, i]
+    ICCs_scatter[(j - 1) * N_con + i, 2] <- i
+    ICCs_scatter[(j - 1) * N_con + i, 3] <- j
+    # check if this is a target ROI / contrast pair 
+    # column names (cur_var) are of the format contrast_ROIcon.ROIregion, so if contrast==ROIcon, this is a target pair
+    ICCs_scatter[(j - 1) * N_con + i, 4] <- 0
+    contrast_ROIcon <- unlist(strsplit(cur_var, "[.]"))[1]  
+    if(unlist(strsplit(contrast_ROIcon, "_"))[1] == unlist(strsplit(contrast_ROIcon, "_"))[2]){
+      ICCs_scatter[(j - 1) * N_con + i, 4] <- 1
+    }
+
+  }
+}
+
+## more prep for scatter plot
+ICCs.df <- data.frame(ICCs_scatter)
+colnames(ICCs.df) <- c("ICC", "con", "roi", "target")
+ICCs.df$con_name <- as.factor(contrast_names[ICCs.df$con])
+ICCs.df$roi_name <- roi_names[ICCs.df$roi]
+exclude_rois <- c("occCortex", "ACC", "wholeBrain")
+if (study == "HCP"){ # remove the secondary contrasts for the remainder of the analyses
+  exclude_cons <- c("motor1", "motor2")
+  N_con <- N_con - 2
+}
+ICCs.df <- ICCs.df[ !(ICCs.df$roi_name %in% exclude_rois) & !(ICCs.df$con_name %in% exclude_cons), ]
+
+# write out
+if ( drop1021 == "yes" ) {
+  
+  write.csv(ICCs.df[, c("ICC", "con_name", "target", "roi_name")], file=paste0(workdir, "ICCs_all_", hemi, "_drop1021.csv"))
+  stop("Wrote out ICCs but halting execution of rest of script after dropping DMHDS1021.")
+  
+} 
+  
+write.csv(ICCs.df[, c("ICC", "con_name", "target", "roi_name")], file=paste0(workdir, "ICCs_all_", hemi, ".csv"))
+
+# mean of non-target ICCs
+mean_nontarget <- mean(ICCs.df[ICCs.df$target==0, "ICC"])
+se_nontarget <- sd(ICCs.df[ICCs.df$target==0, "ICC"]) / sqrt(length(ICCs.df[ICCs.df$target==0, "ICC"]))
+print(paste("Mean of non-target ROIs:", mean_nontarget))
+print(paste("CI for non-target ROI mean: [", mean_nontarget - 1.96 * se_nontarget, mean_nontarget + 1.96 * se_nontarget,"]"))
+# mean of target ICCs
+mean_target <- mean(ICCs.df[ICCs.df$target==1, "ICC"])
+se_target <- sd(ICCs.df[ICCs.df$target==1, "ICC"]) / sqrt(length(ICCs.df[ICCs.df$target==1, "ICC"]))
+print(paste("Mean of target ROIs:", mean_target))
+print(paste("CI for target ROI mean: [", mean_target - 1.96 * se_target, mean_target + 1.96 * se_target,"]"))
+# test for whether non-target < target
+t.test(ICCs.df[ICCs.df$target==0, "ICC"], ICCs.df[ICCs.df$target==1, "ICC"], alternative="l")
+
+# now set negative ICCs to 0 for plotting
+ICCs.df[ICCs.df$ICC<0, "ICC"] <- 0
+```
+
+## Structure
+```{r structure}
+
+ICCs_struct.df <- data.frame(type=integer(), ICC=double(), roi=character())
+names <- c("corrCT", "SA", "aseg")
+
+for ( i in 1:length(names) ) {
+
+  if ( names[i] == "aseg" ) { # retain only variables of interest
+  	if ( study == "DBIS" ){
+  		# used in-house run of freesurfer for Dunedin subcortical volumes
+  		data <- read.csv(paste0(workdir, "Structure/FreeSurfer_aseg_Volume_mm3.csv"), na.strings=".")
+  	} else {
+  		data <- read.csv(paste0(workdir, "Structure/", names[i], "_HCPMPP.csv"))
+  	}
+  	# select only regions of interest
+    data <- data[, c("ID", "bidsid", "time", names(data)[grepl("Cerebellum_Cort|Caudate|Putamen|Pallidum|BrainStem|Hippo|Amygdala|Accumbens|Thalamus", names(data))]) ]
+  } else {
+  	data <- read.csv(paste0(workdir, "Structure/", names[i], "_HCPMPP.csv"), na.strings=".")
+  }
+  data_test <- subset(data[with(data, order(ID)), ], time==1)
+  data_retest <- subset(data[with(data, order(ID)), ], time==2)
+  
+   for(j in 4:ncol(data)){ # loop through ROIs; first columns are ID, bidsid, time, <name>_TOT
+
+      cur_var=colnames(data)[j]
+
+  	  data_combined <- rbind(data_retest[, c("ID", "time", cur_var)], data_test[, c("ID", "time", cur_var)])
+  	  data_combined <- merge(data_combined, interval, by="ID")
+  
+  	  ICC_aov <- get_ICC_aov(data_combined, cur_var, "interval")
+  
+  	  if(j==4 & names[i] != "aseg"){ # this is TOT value
+  		  print(paste("ICC for average", names[i], ":", ICC_aov))
+  	  } else {
+  		  ICCs_struct.df <- rbind(ICCs_struct.df, data.frame(type=i+N_con, ICC=ICC_aov, roi=cur_var))
+  	  }
+
+	} # end loop through regions
+} # end loop through structural variable types
+
+# mean CT, and counts above each threshold
+mean( ICCs_struct.df[ICCs_struct.df$type==N_con+1, "ICC"])
+range(ICCs_struct.df[ICCs_struct.df$type==N_con+1, "ICC"])
+table(ICCs_struct.df[ICCs_struct.df$type==N_con+1, "ICC"] > .4 )[2] / 360
+table(ICCs_struct.df[ICCs_struct.df$type==N_con+1, "ICC"] > .6 )[2] / 360
+table(ICCs_struct.df[ICCs_struct.df$type==N_con+1, "ICC"] > .75 )[2] / 360
+# mean SA, and counts above each threshold
+mean( ICCs_struct.df[ICCs_struct.df$type==N_con+2, "ICC"])
+range(ICCs_struct.df[ICCs_struct.df$type==N_con+2, "ICC"])
+table(ICCs_struct.df[ICCs_struct.df$type==N_con+2, "ICC"] > .4) [2] / 360
+table(ICCs_struct.df[ICCs_struct.df$type==N_con+2, "ICC"] > .6) [2] / 360
+table(ICCs_struct.df[ICCs_struct.df$type==N_con+2, "ICC"] > .75)[2] / 360
+# mean subcort
+mean(ICCs_struct.df[ICCs_struct.df$type==N_con+3, "ICC"])
+range(ICCs_struct.df[ICCs_struct.df$type==N_con+3, "ICC"])
+# write out aseg ICCs for supplemental table
+write.csv(ICCs_struct.df[ICCs_struct.df$type==N_con+3, ], file=paste0(workdir, "Structure/ICCs_aseg.csv"))
+```
+
+
+## PLOTS ##
+```{r plot}
+# background shading
+bg_rects  <- data.frame(ystart=c(-.05,.4,.6,.75), yend=c(.4,.6,.75,1), Range=c('Poor (<.4)','Fair (0.4-0.6)','Good (0.6-0.75)','Excellent (>0.75)'))
+bg_colors <- brewer.pal(9,"Greys")[3:6]
+
+offset <- .05
+ICCs.df$plotx <- ICCs.df$con
+
+# set study-specific parameters for plotting
+# offsetPairs variable is for adjusting points that overlap on plot; format is: c(con/offset,roi1,roi2,multiplier)
+if (study == "DBIS") {
+	# get contrasts into same order as HCP
+	ICCs.df[ICCs.df$plotx==2, "plotx"] <- 0 
+	ICCs.df[ICCs.df$plotx==3, "plotx"] <- 2 
+	ICCs.df[ICCs.df$plotx==4, "plotx"] <- 3 
+	ICCs.df[ICCs.df$plotx==0, "plotx"] <- 4 
+	if(hemi == "bilat") {
+		offsetPairs <- rbind(c(1,8,6,1), c(2,4,5,1), c(3,1,2,1))
+		x_labels <- c("emotion","reward","EF","memory","CT","SA","Subcortical")
+	} else {
+		offset <- .04
+		x_labels <- c("emotion","reward","EF","memory")
+		if(hemi == "R"){
+		  offsetPairs <- rbind(c(2,8,4,1.5), c(3,1,2,1.5), c(4,3,4,1.5))
+		} else {
+		  offsetPairs <- rbind(c(1,6,8,1.5), c(2,4,5,1.5), c(3,1,2,1.5))
+		}
+	} 
+} else {
+	# get contrasts into same order as Dunedin
+	ICCs.df[ICCs.df$plotx > 4, "plotx"] <- ICCs.df[ICCs.df$plotx > 4, "plotx"] - 2
+	ICCs.df[ICCs.df$plotx == 3, "plotx"] <- 0 
+	ICCs.df[ICCs.df$plotx == 7, "plotx"] <- 3 
+	ICCs.df[ICCs.df$plotx == 0, "plotx"] <- 7 
+	if(hemi == "bilat" && includeTwins == "yes"){ 
+		offsetPairs <- rbind(c(4,1,6,2), c(5,1,2,2), c(6,3,6,2), c(3,5,6,1.5), c(2,8,7,2), c(3,8,7,1.5), c(6,8,7,2))
+		x_labels <- c("emotion", "reward", "EF", "motor", "relational", "social", "language", "CT", "SA", "Subcortical")
+	} else {
+		x_labels <- c("emotion", "reward", "EF", "motor", "relational", "social", "language")
+		if(hemi == "R") {
+		  offsetPairs <- rbind(c(2,1,4,2), c(2,3,6,2), c(4,2,8,2), c(5,1,8,2), c(6,8,7,1.5), c(6,4,6,2))
+		} else {
+		  offsetPairs <- rbind(c(2,1,2,2), c(3,1,4,1), c(5,1,2,1.5), c(2,3,4,4), c(5,5,8,3), c(4,6,7,1.5), c(6,1,7,1.5))
+		}
+		if(includeTwins == "no") {
+		  offsetPairs <- rbind(c(1,1,6,2), c(1,5,8,2), c(2,1,2,2), c(2,3,5,4), c(4,2,6,2), c(5,2,8,2), c(5,1,5,2), c(6,3,8,2), c(3,2,3,2))
+		  hemi <- "bilatNoTwin"
+		}
+	}
+}
+
+for(i in 1:nrow(offsetPairs)) {
+   ICCs.df[ICCs.df$plotx == offsetPairs[i, 1] & ICCs.df$roi == offsetPairs[i, 2], "plotx"] <- ICCs.df[ICCs.df$plotx == offsetPairs[i, 1] & ICCs.df$roi == offsetPairs[i, 2], "plotx"] - offsetPairs[i, 4] * offset; 
+   ICCs.df[ICCs.df$plotx == offsetPairs[i, 1] & ICCs.df$roi == offsetPairs[i, 3], "plotx"] <- ICCs.df[ICCs.df$plotx == offsetPairs[i, 1] & ICCs.df$roi == offsetPairs[i, 3], "plotx"] + offsetPairs[i, 4] * offset; 
+}
+
+plot <- ggplot() +
+	geom_rect(data=bg_rects, aes(ymin=ystart, ymax=yend, xmin=-Inf, xmax=Inf, fill=Range), alpha=.6) +
+	scale_fill_manual(values=bg_colors, limits=rev(c('Poor (<.4)', 'Fair (0.4-0.6)', 'Good (0.6-0.75)', 'Excellent (>0.75)')))+
+	geom_point(data=ICCs.df, aes(x=plotx, y=ICC, color=roi_name), size=4) +
+	geom_point(data=ICCs.df[ICCs.df$target==1, ], aes(x=plotx, y=ICC), color="black", size=6) +
+	geom_point(data=ICCs.df[ICCs.df$target==1, ], aes(x=plotx, y=ICC, color=roi_name), size=4) +
+  geom_point(data=ICCs.df[ICCs.df$roi_name=="PCG", ], aes(x=plotx, y=ICC), color=brewer.pal(n=8, name="Set1")[6], size=4) + # do this bc PCG is hiding for social task	
+	scale_x_continuous(labels=x_labels, breaks=seq(1, length(x_labels), 1), minor_breaks=seq(1, length(x_labels), 1), name="Task", limits=c(.5, length(x_labels) + .5)) +
+	scale_color_brewer(palette="Set1") +
+	scale_y_continuous(limits=c(-.05, 1), expand = c(0, 0), minor_breaks=seq(-.05, 1, .05)) +
+	labs(fill="ICC Range") +
+	labs(color="Region") +
+	guides(colour = guide_legend(override.aes = list(size=4))) +
+	theme_bw() 	
+
+if(hemi == "bilat"){
+	plot <- plot + geom_violin(data=ICCs_struct.df, aes(x=type, y=ICC, group=type))
+}
+
+png(paste0(workdir, "ICCs_ALL_matrix_scatter_", hemi, ".png"), height=5, width=length(x_labels), res=300, units="in")
+	print(plot)
+dev.off()
+```
+
+## Functional ROIs
+```{r functional ROIs}
+data_func <- read.csv(paste0(workdir, "list_out_functional.csv"))
+data_test <- subset(data_func[with(data_func,order(ID)),], time==1)
+data_retest <- subset(data_func[with(data_func,order(ID)),], time==2)
+ICCs_func.df <- NULL
+for(i in 1:(ncol(data_func)-2)){ # loop through contrasts
+
+	cur_var <- colnames(data_func)[i+2]
+
+	data_combined <- rbind(data_retest[, c("ID", "time", cur_var)], data_test[, c("ID", "time", cur_var)])
+	data_combined <- merge(data_combined, interval, by="ID")
+
+	ICC_aov <- get_ICC_aov(data_combined, cur_var, "interval")
+
+	# now grab corresponding anatomical ICC
+	task_name <- unlist(strsplit(cur_var, "[.]"))[1]
+	ICCs_func.df <- rbind(ICCs_func.df, data.frame(type="Functional", "ICC"=ICC_aov, "task"=task_name))
+	ICCs_func.df <- rbind(ICCs_func.df, data.frame(type="Anatomical", "ICC"=ICCs.df[ICCs.df$target==1 & ICCs.df$con_name==task_name, "ICC"], "task"=task_name))
+
+}
+# mean of target ICCs
+mean_target <- mean(ICCs_func.df[ICCs_func.df$target==1, "ICC"])
+se_target <- sd(ICCs_func.df[ICCs_func.df$target==1, "ICC"]) / sqrt(length(ICCs_func.df[ICCs_func.df$target==1, "ICC"]))
+print(paste("Mean of target ROIs:", mean_target))
+print(paste("CI for target ROI mean: [", mean_target - 1.96 * se_target, mean_target + 1.96 * se_target,"]"))
+# test for whether anat < func
+t.test(ICCs_func.df[ICCs_func.df$type=="Anatomical", "ICC"], ICCs_func.df[ICCs_func.df$type=="Functional", "ICC"], alternative="l")
+# write out
+write.csv(ICCs_func.df[, c("ICC","type","task")], file=paste0(workdir, "ICCs_all_func.csv"))
+```
+
+
+## plot for functional ROIs
+```{r plot func}
+ICCs_func.df$plotx <- 0; ICCs_func.df$roi_name <- ""
+ICCs_func.df[ICCs_func.df$task=="emotion", "plotx"] <- 1; ICCs_func.df[ICCs_func.df$task=="emotion", "roi_name"] <- "amygdala"
+ICCs_func.df[ICCs_func.df$task=="reward", "plotx"] <- 2; ICCs_func.df[ICCs_func.df$task=="reward", "roi_name"] <- "VS"
+ICCs_func.df[ICCs_func.df$task=="wm", "plotx"] <- 3; ICCs_func.df[ICCs_func.df$task=="wm", "roi_name"] <- "dlPFC"
+if (study == "DBIS"){
+	ICCs_func.df[ICCs_func.df$task=="memory", "plotx"] <- 4; ICCs_func.df[ICCs_func.df$task=="memory", "roi_name"] <- "hippocampus"
+	roi_colors <- brewer.pal(8, 'Set1')[c(1, 8, 3, 5)]
+	color_list <- c("amygdala"=roi_colors[1], "VS"=roi_colors[2], "dlPFC"=roi_colors[3], "hippocampus"=roi_colors[4])
+	x_labels <- c("emotion", "reward", "EF"," memory")
+} else {
+	ICCs_func.df[ICCs_func.df$task=="motor","plotx"] <- 4; ICCs_func.df[ICCs_func.df$task=="motor","roi_name"] <- "PCG"
+	ICCs_func.df[ICCs_func.df$task=="relational","plotx"] <- 5; ICCs_func.df[ICCs_func.df$task=="relational","roi_name"] <- "rlPFC"
+	ICCs_func.df[ICCs_func.df$task=="social","plotx"] <- 6; ICCs_func.df[ICCs_func.df$task=="social","roi_name"] <- "fusiform"
+	ICCs_func.df[ICCs_func.df$task=="language","plotx"] <- 7; ICCs_func.df[ICCs_func.df$task=="language","roi_name"] <- "ATL"
+	roi_colors <- brewer.pal(8, 'Set1')[c(1, 8, 3, 6, 7, 4, 2)]
+	color_list <- c("amygdala"=roi_colors[1], "VS"=roi_colors[2], "dlPFC"=roi_colors[3], "PCG"=roi_colors[4], "rlPFC"=roi_colors[5], "fusiform"=roi_colors[6], "ATL"=roi_colors[7])
+	x_labels <- c("emotion", "reward", "control", "motor", "relational", "social", "language")
+}
+
+png(paste0(workdir, "ICCs_ALL_matrix_scatter_func.png"), height=5, width=length(x_labels), res=300, units="in")
+print(ggplot() +
+	  geom_rect(data=bg_rects, aes(ymin=ystart, ymax=yend, xmin=-Inf, xmax=Inf, fill=Range), alpha=0.6) +
+	  scale_fill_manual(values=bg_colors, limits=rev(c('Poor (<.4)', 'Fair (0.4-0.6)', 'Good (0.6-0.75)', 'Excellent (>0.75)')))+
+	  geom_point(data=ICCs_func.df[ICCs_func.df$type=="Functional", ], aes(x=plotx, y=ICC), color="black", size=6) +
+	  geom_point(data=ICCs_func.df[ICCs_func.df$type=="Functional", ], aes(x=plotx, y=ICC, color=roi_name), size=4) +
+	  scale_x_continuous(labels=x_labels, breaks=seq(1,length(x_labels),1), minor_breaks=seq(1,length(x_labels),1), name="Task", limits=c(.5, length(x_labels)+.5)) +
+	  scale_color_manual(values=color_list) +
+	  scale_y_continuous(limits=c(-.05, 1), expand = c(0, 0), minor_breaks=seq(-.05,1,.05)) +
+	  labs(fill="ICC Range") +
+	  labs(color="Region") +
+	  guides(colour = guide_legend(override.aes = list(size=5))) +
+	  theme_bw())
+dev.off()
+```

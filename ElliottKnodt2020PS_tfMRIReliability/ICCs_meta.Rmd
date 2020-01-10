@@ -202,7 +202,7 @@ For details on the z to r transf for plotting: http://r.789695.n4.nabble.com/z-t
 Grouped by "thresholded on ICC"
 ```{r forest}
 
-r <- 1 # assume independence (r=0) or non-independence (r=1) of ICCs within a substudy
+r <- 0 # assume independence (r=0) or non-independence (r=1) of ICCs within a substudy
 if(r==1){
   dat  <- paper_summaries_ThrICC_r1
   dat0 <- paper_summaries_ThrICC0_r1
@@ -217,7 +217,7 @@ if(r==1){
 par(mar=c(4, 4, 1, 2))
 xmin <- -3.7 
 xmax <- 2
-xcol <- c(-2.5, -1.9, -1.6, -1.3, -1)
+xcol <- c(-3, -1.6, -1.5, -1.15, -.9)
 ymax <- nrow(dat) + 8
 cex_sm <- .65
 cex_md <- .75
@@ -229,7 +229,7 @@ subgp_row_end <- c(nThr1, ymax - 4)
 ExpID_split <- do.call(rbind, strsplit(as.character(dat$ExpID), ";"))
 paper <- sub("20", ", 20", ExpID_split[, 1])
 task <- ExpID_split[, 2]
-interval <- ExpID_split[, 3]
+interval <- as.numeric(ExpID_split[, 3])
 hc <- ExpID_split[, 4]
 
 ### fit random-effects model (use slab argument to define study labels)
@@ -248,7 +248,8 @@ png(paste0(workdir, 'forest_groupedThrICC_exp_r', r, '.png', sep=""), height=13,
 forest(res.grouped, transf = transf.ztor, 
        xlim = c(xmin, xmax), ylim = c(-1, ymax + 1), 
        rows = c(subgp_row_start[1]:subgp_row_end[1], subgp_row_start[2]:subgp_row_end[2]),
-       xlab = "ICC", mlab = "", ilab = cbind(task, interval, hc, dat$nSub, dat$nICC), ilab.xpos = xcol, 
+       xlab = "ICC", mlab = "", 
+       ilab = cbind(task, round(interval, 0), hc, round(dat$nSub, 0), round(dat$nICC, 0)), ilab.xpos = xcol, ilab.pos = c(4, 2, 4, 2, 2),
        cex = cex_sm, cex.lab= cex_md, cex.axis = cex_md, 
        addfit = FALSE, digits = 3 )
 
@@ -256,18 +257,18 @@ forest(res.grouped, transf = transf.ztor,
 op <- par(cex=cex_sm, font=4)
  
 ### add text for the subgroups
-text(xmin, c(subgp_row_end[1] + 1, subgp_row_end[2] - 1), pos=4, c("Thresholded on ICC", "Not thresholded on ICC" ))
+text(xmin, c(subgp_row_end[1] + 1, subgp_row_end[2] + 1), pos=4, c("Thresholded on ICC", "Not thresholded on ICC" ))
  
 ### switch to bold font
 par(font=2)
  
 ### add column headings to the plot
 text(xmin, ymax, "Author, Year",  pos=4)
-text(xcol[1], ymax, "Task")
-text(xcol[2], ymax, "Interval")
-text(xcol[3], ymax, "Healthy")
-text(xcol[4], ymax, "# Subjects")
-text(xcol[5], ymax, "# ICCs")
+text(xcol[1], ymax, "Task", pos=4)
+text(xcol[2], ymax, "Interval", pos=2)
+text(xcol[3], ymax, "Healthy", pos=NULL)
+text(xcol[4], ymax, "# Subjects", adj=.7)
+text(xcol[5], ymax, "# ICCs", pos=NULL)
 text(xmax, ymax, "ICC [95% CI]", pos=2)
  
 ### set par back to the original settings

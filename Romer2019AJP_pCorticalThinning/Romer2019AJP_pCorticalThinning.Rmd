@@ -543,7 +543,7 @@ for ( i in 1:length(df_list) ) {
 }
 ```
 
-### correlations between factor parcelwise CT effects (fig. 3a)
+### correlations between factor parcelwise CT effects
 ```{r CT CF cor plot}
 corrCF <- subset(cCT_P_B, select=c("bval"))
 corrCF <- cbind(corrCF, cCT_INT_CF$bval, cCT_EXT_CF$bval, cCT_THD_CF$bval)
@@ -551,7 +551,7 @@ names(corrCF) <- c('P','INT','EXT','THD')
 ggcorr(corrCF, method=c("everything","pearson"), label="TRUE", label_round=4)
 ```
 
-### correlations between factors (fig. 3b)
+### correlations between factors
 ```{r CF cor plot}
 corrP <- subset(TOT,select=c("P_B"))
 corrP <- cbind(corrP, TOT$INT_CF, TOT$EXT_CF, TOT$THD_CF)

@@ -199,12 +199,6 @@ Define function that takes a subject list and path template
 
 ### letting ROIs, CAB, workdir, nRegions be global variables from above
 
-# FC_ALL_t1and2:
-#  col1 = "id"
-#  col2 = "time" (1 or 2)
-#  remaining colums are 1:nEdges
-# only contains data for test retest subjects to use!
-
 getFCICCs <- function(FC_ALL_t1and2, outname){
 
   nFC <- (nRegions*(nRegions-1))/2
@@ -394,51 +388,18 @@ save(FC_ALL, file=paste0(workdir,"data/FC_ALL_HCP-A_GFC_N711.Rdata"))
 
 ```
 
-## FC Reliability
+## FC Reliability - get ICCs
 ```{r FCICCs}
 
-
-# ## DBIS GFC
-# path_template <- "H:/Studies/DBIS/Imaging/derivatives/HCP_MPP/SUBJECT/MNINonLinear/Results/GFC_GSR35/GFC_GSR35_FIR_CorMat.csv"
-# id_list <- paste0(workdir,"data/IDs_DBIS_time2.txt")
-# getFCICCs(id_list, path_template, "DBIS_GFC.FINAL")
-# 
-# 
-# ## DBIS REST
-# path_template <- "H:/Studies/DBIS/Imaging/derivatives/HCP_MPP/SUBJECT/MNINonLinear/Results/REST_GSR35/3T_REST_Time1.MSMSulc.GSR.Glasser396.phaseEnc_unbalanced.FIR.full.corMat.csv"
-# id_list <- paste0(workdir,"data/IDs_DBIS_time2.txt")
-# getFCICCs(id_list, path_template, "DBIS_rest.FINAL")
-
-# ## HCP GFC 
-# id_list <- paste0(workdir,"data/IDs_HCP_time2.txt")
-# for(i in seq(5,40,5)){
-#   path_template <- paste0("H:/Studies/HCP/Analyzed_LoNG/TimeTIME/SUBJECT/corMats/3T_GFC_TimeTIME.MSMSulc.GSR.Glasser396.phaseEnc_unbalanced.FIR.", i, ".corMat.csv")
-#   getFCICCs(id_list, path_template, paste0("HCP_GFC.",i))
-# }
-# 
-# ## HCP rest    
-# id_list <- paste0(workdir,"data/IDs_HCP_time2.txt")
-# for(i in seq(5,40,5)){
-#   path_template <- paste0("H:/Studies/HCP/Analyzed_LoNG/TimeTIME/SUBJECT/corMats/3T_REST_TimeTIME.MSMSulc.GSR.Glasser396.phaseEnc_unbalanced.", i, ".corMat.csv")
-#   getFCICCs(id_list, path_template, paste0("HCP_rest.",i))
-# }
-
-##########################
-load( paste0(workdir,"data/FC_ALL_DBIS_GFC_N769.Rdata") )
-load( paste0(workdir,"data/FC_ALL_DBIS_REST_N769.Rdata") )
-load( paste0(workdir,"data/FC_ALL_DBIS_GFC_N19_t2.Rdata") )
-load( paste0(workdir,"data/FC_ALL_DBIS_REST_N19_t2.Rdata") )
-load( paste0(workdir,"data/FC_ALL_HCP_REST_N875.Rdata") )
-load( paste0(workdir,"data/FC_ALL_HCP_GFC_N875.Rdata") )
-
-# DBIS REST
-load(paste0(workdir,paste0("data/FC_ALL_HCP_",type,".",i,"_N32_t1.Rdata")))
-FC_ALL_t1 <- cbind( data.frame(id=FC_ALL$id, time=rep(1,nrow(FC_ALL))), FC_ALL[,2:ncol(FC_ALL)] )
-load(paste0(workdir,paste0("data/FC_ALL_HCP_",type,".",i,"_N32_t2.Rdata")))
-FC_ALL_t2 <- cbind( data.frame(id=FC_ALL$id, time=rep(2,nrow(FC_ALL))), FC_ALL[,2:ncol(FC_ALL)] )
-FC_ALL_t1and2 <- rbind( FC_ALL_t2, FC_ALL_t1[which(FC_ALL_t1$id %in% FC_ALL_t2$id),])  
-getFCICCs( FC_ALL_t1and2, paste0("HCP_",type,".",i) )
-    
+# DBIS 
+for(type in c("REST","GFC")) {
+  load(paste0(workdir,paste0("data/FC_ALL_DBIS_",type,"_N769.Rdata")))
+  FC_ALL_t1 <- cbind( data.frame(id=FC_ALL$id, time=rep(1,nrow(FC_ALL))), FC_ALL[,2:ncol(FC_ALL)] )
+  load(paste0(workdir,paste0("data/FC_ALL_DBIS_",type,"_N19_t2.Rdata")))
+  FC_ALL_t2 <- cbind( data.frame(id=FC_ALL$id, time=rep(2,nrow(FC_ALL))), FC_ALL[,2:ncol(FC_ALL)] )
+  FC_ALL_t1and2 <- rbind( FC_ALL_t2, FC_ALL_t1[which(FC_ALL_t1$id %in% FC_ALL_t2$id),])  
+  getFCICCs( FC_ALL_t1and2, paste0("DBIS_",type) )
+}    
 
 # HCP reliability, 5 min increments
 for( i in seq(5,40,5) ) {
@@ -451,17 +412,6 @@ for( i in seq(5,40,5) ) {
     getFCICCs( FC_ALL_t1and2, paste0("HCP_",type,".",i) )
   }
 }
-
-## 7/10/23 Response to Reviews: running with thresholded FC matrices
-## (for DBIS GFC, I first ran with thresholding the edges and then calculating ICCs and confirmed they matched just masking ICCs by top edges)
-
-runEdgeThr("DBIS","GFC","FC_ALL_DBIS_GFC_N769","FC_ALL_DBIS_GFC_N19_t2","Glasser_ICCs_FCall_DBIS_GFC.FINAL_mean0.532")
-runEdgeThr("DBIS","REST","FC_ALL_DBIS_REST_N769","FC_ALL_DBIS_REST_N19_t2","Glasser_ICCs_FCall_DBIS_rest.FINAL_mean0.386")
-runEdgeThr("HCP","GFC","FC_ALL_HCP_GFC_N875","FC_ALL_HCP_GFC_N32_t2","Glasser_ICCs_FCall_HCP_GFC.40.CORRECTED_mean0.575")
-runEdgeThr("HCP","REST","FC_ALL_HCP_REST_N875","FC_ALL_HCP_REST_N32_t2","Glasser_ICCs_FCall_HCP_REST.40.CORRECTED_mean0.587")
-
-
-
 
 
 ```
@@ -483,10 +433,6 @@ for (type in c("REST","GFC") ){
     ICC_file <- dir( paste0(workdir, "GlasserIntermediateFiles"), pattern=paste0("Glasser_ICCs_FCavg_HCP_", type, ".", i, "_mean.*.csv$") )
     ICCs_tmp <- read.csv( paste0(workdir, "GlasserIntermediateFiles/", ICC_file) )
     for( val in ICCs_tmp$bval ){ ICCs.df <- rbind( ICCs.df, data.frame(type=paste0("FC_",type.plot), minutes=i, ICC=val) ) }
-    # ## using all edges rather than region avgs
-    # ICC_file <- dir( paste0(workdir, "ICCs_FCedges/"), pattern=paste0("Glasser_ICCs_FCall_HCP_", type, ".", i, ".CORRECTED_mean.*.csv$") )
-    # ICCs_tmp <- read.csv( paste0(workdir, "ICCs_FCedges/", ICC_file) )
-    # for( val in ICCs_tmp ){ ICCs.df <- rbind( ICCs.df, data.frame(type=paste0("FC_",type.plot), minutes=i, ICC=val) ) }
     ## Ga1 values
     ICC_file <- dir( paste0(workdir, "GlasserIntermediateFiles"), pattern=paste0("Glasser_ICCs_HCP_", sub("REST","rest",type), ".", i, "_mean.*.csv$") )
     ICCs_tmp <- read.csv( paste0(workdir, "GlasserIntermediateFiles/", ICC_file) )
@@ -532,59 +478,16 @@ for (type in c("rest","GFC") ){
   }
 }
 
-# # # v1, all measures
-# # # cols3 <- hue_pal()(3) # ggplot default 3 colors
-# # # cols3_dim1 <- brightness(cols3,.6)
-# # # cols3_dim2 <- brightness(cols3,.4)
-# # # cols <- c(cols3[1],cols3_dim2[1],cols3_dim1[1],cols3[2],cols3_dim2[2],cols3_dim1[2],cols3[3],cols3_dim2[3],cols3_dim1[3])
-# # ICCs.df$met1 <- rep( c(rep("UniHet",3), rep("Abs",3), rep("PriHetAss",3)), 18 )
-# # ICCs.df$met2 <- rep( c("min","max","range","max","min","range","min","max","range"), 18)
-# # # ICCs.df$minutes <- factor(ICCs.df$minutes, levels=order(levels(as.factor(ICCs.df$minutes))))
-# # # ICCs.df$minutes <- factor(ICCs.df$minutes, levels=c("5","8","10","15","20","25","30","34","35","40") )
-# # level_order <- c("5","8","10","15","20","25","30","34","35","40") 
-# # ########## scale_x_distcrete puts xlabels in right order but they are squished on the left!!
-# # png(paste0(workdir,"ICCs_GaSummaryMeasuresComparison.png"),height=5,width=7,res=300,units="in")
-# #   print( 
-# #     ggplot(ICCs.df[ICCs.df$study=="HCP",], aes(x=minutes, y=ICC, color=met1, linetype=met2, group=interaction(met1,met2) )) + 
-# #       geom_line() + 
-# #       scale_x_discrete(limits=level_order) +
-# #       geom_point(data=ICCs.df[ICCs.df$study=="DBIS",], size=1, aes(x=minutes,color=met1, pch=met2)) + 
-# #       facet_wrap(~type, ncol=2) +
-# #       ylim(c(0,1)) + theme_hc() + theme(legend.position="right") +
-# #       xlab("Amount of data (in minutes)")  
-# #   )
-# # dev.off()
-# 
-# v2, just uniHet range, or swithc out a few lines down for segregation
+# pull out just uni-het range
 ICCs.df$met1 <- rep( c(rep("UniHet",3), rep("Abs",3), rep("PriHetAss",3),"segregation"), 18 )
 ICCs.df$met2 <- rep( c("min","max","range","max","min","range","min","max","range","segregation"), 18)
-# ICCs.df <- ICCs.df[which(ICCs.df$met1=="UniHet" & ICCs.df$met2=="range"), ] ###### use this for UniHet
-ICCs.df <- ICCs.df[which(ICCs.df$met1=="segregation"), ] ###### use this for segregation
-# # level_order <- c("5","8","10","15","20","25","30","34","35","40") # scale_x_discrete(limits=level_order) + ### seemed to need this before (v1) but works now when i take it out of call to ggplot??
-# png(paste0(workdir,"ICCs_GaRangeByTime.png"),height=5,width=7,res=300,units="in")
-#   print(
-#     ggplot() +
-#       geom_rect(data=bg_rects, aes(ymin=ystart, ymax=yend, xmin=-Inf, xmax=Inf, fill=Range), alpha=.4) +
-# 	    scale_fill_manual(values=bg_colors, limits=rev(c('Poor (< .4)', 'Fair (0.4 - 0.6)', 'Good (0.6 - 0.75)', 'Excellent (> 0.75)'))) +
-#       geom_line(data=ICCs.df[ICCs.df$study=="HCP",], size=3, aes(x=minutes, y=ICC, group=type), color="black" ) +
-#       geom_line(data=ICCs.df[ICCs.df$study=="HCP",], size=2, aes(x=minutes, y=ICC, color=type )) +
-#       scale_color_manual(values=pairedGreens, labels=c("REST","GFC")) +
-#       scale_x_continuous(breaks=seq(5,40,5)) +
-#       geom_point(data=ICCs.df[ICCs.df$study=="DBIS",], size=5, aes(x=minutes, y=ICC), color="black") +
-#       geom_point(data=ICCs.df[ICCs.df$study=="DBIS",], size=4, aes(x=minutes, y=ICC, color=type)) +
-#       ylim(c(0,1)) + theme_hc() + theme(legend.position="right") +
-#       xlab("Amount of data (in minutes)")
-#   )
-# dev.off()
+ICCs.df <- ICCs.df[which(ICCs.df$met1=="range"), ] ###### use this for segregation
   
-# v3, just uniHet range, with points instead of lines for HCP   
 png(paste0(workdir,"ICCs_GaRangeByTime.png"),height=5,width=7,res=300,units="in")
   print(
     ggplot() +
       geom_rect(data=bg_rects, aes(ymin=ystart, ymax=yend, xmin=-Inf, xmax=Inf, fill=Range), alpha=.4) +
 	    scale_fill_manual(values=bg_colors, limits=rev(c('Poor (< .4)', 'Fair (0.4 - 0.6)', 'Good (0.6 - 0.75)', 'Excellent (> 0.75)'))) +
-      # geom_line(data=ICCs.df[ICCs.df$study=="HCP",], size=3, aes(x=minutes, y=ICC, group=type), color="black" ) +
-      # geom_line(data=ICCs.df[ICCs.df$study=="HCP",], size=2, aes(x=minutes, y=ICC, color=type )) +
       geom_point(data=ICCs.df, size=5, aes(x=minutes, y=ICC, shape=study), color="black") +
       geom_point(data=ICCs.df, size=4, aes(x=minutes, y=ICC, shape=study, color=type)) +
       scale_color_manual(values=pairedGreens, labels=c("REST","GFC")) +
@@ -628,7 +531,6 @@ for( files in list(DBIS_REST, DBIS_GFC, DBIS_RESTvGFC, HCP_REST, HCP_GFC, HCP_RE
                                        ))
   
 }
-
 
 
 ```
@@ -786,35 +688,23 @@ for( type in c("GFC","REST") ){
 ```
 
 ## Associations: summarize / check data - group avg gradient, hists and demographics
-!!!!!!!!!!! need to update this for data variables name changed to data_<study>_<type>
 ```{r summarize}
 
-# # ### Print histograms - !!!!!!!!!! need to update this for multiple gradients!!!!!!!!!!
-# # w <- 2+2*length(behavvars)
-# # png(paste0(workdir,"hists_behavvars_",study,".png"),height=4,width=w,res=300,units="in")
-# #   par(mfrow=c(1,length(behavvars)))
-# #   for(v in behavvars){
-# #     hist(data[,paste(v)], main=v, xlab="", sub=paste("N: ",sum(!is.na(data[,paste(v)]))))
-# #   }
-# # dev.off()
-# # png(paste0(workdir,"hists_summaryMeasures_",study,".",type,".png"),height=10,width=10,res=300,units="in")
-# #   par(mfrow=c(3,3))
-# #   for(v in summaryMeasures){
-# #     hist(data[,paste(v)], main=v, xlab="", sub=paste("N: ",sum(!is.na(data[,paste(v)]))))
-# #   }
-# # dev.off()
-# 
-# 
-# ### get group mean gradient for Glasser ROIs
-# GroupAvg_Glasser <- data.frame(ROI=ROIs, bval=colMeans(data[[1]][, ROIs], na.rm=TRUE))
-# write.csv(GroupAvg_Glasser,file=paste0(workdir,"Glasser_Ga1GroupAvg_",study,".",type,".csv"), row.names=FALSE)
+# get group mean gradient for Glasser ROIs
+for ( study in c("HCP","DBIS","HCP-A")) {
+  for ( type in c("REST","GFC") ){
+    GroupAvg_Glasser <- data.frame(ROI=ROIs, bval=colMeans(get(paste("data", study, type, sep="_"))[[1]][, ROIs], na.rm=TRUE))
+    write.csv(GroupAvg_Glasser,file=paste0(workdir,"Glasser_Ga1GroupAvg_",study,".",type,".csv"), row.names=FALSE)
+  }
+}
+
 
 # Demo stats
 
 ## Dunedin
 exactAge <- read.csv('H:/Projects/Annchen/DBIS/Gradients/GradientReliabilityPaper/data/exactAge_052819.csv', header = TRUE, na.strings=".")
 exactAge$snum <- as.numeric(sub("sub-","",exactAge$snum))
-dataForDemo <- merge(data[[1]], exactAge[,c("snum","exactAge")], by="snum")
+dataForDemo <- merge(data_DBIS_GFC[[1]], exactAge[,c("snum","exactAge")], by="snum")
 incSubs_all <- dataForDemo[which(!is.na(dataForDemo$UniHetRange)),"snum"]
 incSubs_retest <- dataForDemo[which(dataForDemo$snum > 2000 & dataForDemo$snum != 21021), "snum"]
 for(incSubs in list(incSubs_all, incSubs_retest)) {
@@ -836,7 +726,7 @@ for(incSubs in list(incSubs_all, incSubs_retest)) {
 ## HCP use CogTotalComp_AgeAdj
 ## HCP-A use nih_totalcogcomp_ageadjusted
 ## HCP-A: 632 have SOME cognition score (as reflected in HCA_LS_2.0_subject_completeness file), but only 607 have full totalcogcomp_ageadjusted (somehow 615 have unadjusted)
-dataForDemo <- data[[1]]
+dataForDemo <- data_HCP_GFC[[1]]
 incSubs_all <- dataForDemo[which(!is.na(dataForDemo$UniHetRange)),"snum"]
 incSubs_retest <- read.table(paste0(workdir,"data/IDs_HCP_time2.txt"))$V1
 for(incSubs in list(incSubs_all)) {

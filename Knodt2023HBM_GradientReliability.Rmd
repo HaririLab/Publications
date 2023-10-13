@@ -619,15 +619,7 @@ for( type in c("GFC","REST") ){
     if (study=="DBIS") {
       
       behavdata <- read.spss(paste0(proj,'/Annchen/DBIS/Gradients/GradientReliabilityPaper/data/Cortex_Cogn_Checking2023.sav'),to.data.frame = TRUE,use.value.labels=FALSE) # for IQ / POA
-      p <- read.csv(paste0("H:/Database/DBIS/P45_pFactor_June2019.csv"), header = TRUE) # P_BF45
-      lead <- read.spss(paste0(proj,'/Annchen/DBIS/StatCheck/Lead/Brains_Lead_13Dec2019_forChecking.sav'),to.data.frame = TRUE,use.value.labels=FALSE) # for IQ decline
 
-      names(p)[1] <- "snum"
-      lead$iqDecline <- lead$IQ79 - lead$fsiq45a
-      behavvars <- c("EXT_CF45","INT_CF45","THD_CF45")
-      # behavvars <- c("PaceOfAgingP45","fsIQ45_STD","IQ79","iqDecline")
-      behavvars_disp <- c("POA","IQ","ChIQ","IQdec") # think this actually gets overwritten in a later section
-      
       # merge data 
       data <- list()
       for ( i in 1:3 ){
@@ -655,14 +647,12 @@ for( type in c("GFC","REST") ){
       names(HCPbehavioral)[1] <- "snum" # just so i can use same code as Dunedin
       names(HCPbehavioral)[4] <- "sex" # just so i can use same code as Dunedin  
       names(HCPbehavioralR)[1] <- "snum" # just so i can use same code as Dunedin
-      behavvars <- c("Age","CogTotalComp_Unadj","CogTotalComp_AgeAdj")
-      behavvars_disp <- c("Age","CogRaw","CogAdj")
-      
+
       # merge data 
       data <- list()
       for ( i in 1:3 ){
         data[[i]] <- join_all(list(
-          HCPbehavioral[,c("snum","sex","CogTotalComp_Unadj","CogTotalComp_AgeAdj")],
+          HCPbehavioral[,c("snum","sex","CogTotalComp_AgeAdj")],
           HCPbehavioralR[,c("snum","Age")],
           motion[,c("snum","AverageFD")],
           G[[i]]
@@ -689,14 +679,12 @@ for( type in c("GFC","REST") ){
       HCPbehavioral2$Age <- HCPbehavioral2$Age / 12
       HCPbehavioral$snum <- sub("HCA","",HCPbehavioral$snum)
       HCPbehavioral2$snum <- sub("HCA","",HCPbehavioral2$snum)
-      behavvars <- c("nih_totalcogcomp_unadjusted","nih_totalcogcomp_ageadjusted","nih_fluidcogcomp_unadjusted","nih_fluidcogcomp_ageadjusted")
-      behavvars_disp <- c("Age","CogRaw","CogAdj","FlCogRaw","FlCogAdj")
-      
+
       # merge data 
       data <- list()
       for ( i in 1:3 ){
         data[[i]] <- join_all(list(
-          HCPbehavioral[,c("snum",behavvars)],
+          HCPbehavioral[,c("snum","nih_totalcogcomp_ageadjusted")],
           HCPbehavioral2[,c("snum","Age","sex")],
           motion[,c("snum","AverageFD")],
           G[[i]]
